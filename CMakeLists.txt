@@ -8,6 +8,10 @@ set(SNESRECOMP_SDL_BACKEND "SDL2" CACHE STRING
     "Desktop SDL backend (the SMRPG host currently uses SDL2)")
 include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 
+set(RECOMP_UI_ROOT "${CMAKE_SOURCE_DIR}/../../recomp-ui" CACHE PATH
+    "Path to the shared recomp-ui checkout")
+include(${RECOMP_UI_ROOT}/recomp_ui.cmake)
+
 file(GLOB SMRPG_GEN_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/gen/*.c")
 if(NOT SMRPG_GEN_SOURCES)
@@ -44,7 +48,7 @@ function(configure_smrpg_target target)
         SNESRECOMP_REVERSE_DEBUG=0)
     if(NOT MSVC)
         target_compile_options(${target} PRIVATE
-            -w -Wno-implicit-function-declaration)
+            $<$<COMPILE_LANGUAGE:C>:-w;-Wno-implicit-function-declaration>)
         target_link_libraries(${target} PRIVATE m)
     endif()
     target_link_libraries(${target} PRIVATE
@@ -54,3 +58,4 @@ endfunction()
 configure_smrpg_target(SuperMarioRPGSNESRecompHeadless)
 configure_smrpg_target(SuperMarioRPGSNESRecomp)
 snesrecomp_target_sdl(SuperMarioRPGSNESRecomp)
+recomp_target_launcher_ui(SuperMarioRPGSNESRecomp CONSOLE snes)

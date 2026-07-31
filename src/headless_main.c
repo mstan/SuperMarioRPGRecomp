@@ -6,6 +6,7 @@
 #include "snes/apu.h"
 #include "snes/cart.h"
 #include "snes/dsp.h"
+#include "snes/ppu.h"
 #include "snes/sa1.h"
 #include "snes/snes.h"
 
@@ -35,6 +36,14 @@ typedef struct WavWriter {
   FILE *stream;
   uint32_t data_bytes;
 } WavWriter;
+
+typedef struct InputSpan {
+  long first;
+  long last;
+  uint32_t mask;
+} InputSpan;
+
+enum { kMaxInputSpans = 128 };
 
 static uint64_t fnv1a_update(uint64_t hash, const void *data, size_t size) {
   const uint8_t *bytes = (const uint8_t *)data;
@@ -135,12 +144,12 @@ static int wav_close(WavWriter *writer) {
   return ok;
 }
 
-static int write_ppm(const char *path, const uint8_t *pixels) {
+static int write_ppm(const char *path, const uint8_t *pixels, int width) {
   if (!path || !path[0]) return 1;
   FILE *stream = fopen(path, "wb");
   if (!stream) return 0;
-  fprintf(stream, "P6\n256 224\n255\n");
-  for (size_t i = 0; i < 256u * 224u; i++) {
+  fprintf(stream, "P6\n%d 224\n255\n", width);
+  for (size_t i = 0; i < (size_t)width * 224u; i++) {
     uint8_t rgb[3] = {pixels[i * 4u + 2u], pixels[i * 4u + 1u],
                       pixels[i * 4u]};
     if (fwrite(rgb, 1, sizeof(rgb), stream) != sizeof(rgb)) {
@@ -160,7 +169,8 @@ static int write_wram_dump(const char *path) {
   return ok;
 }
 
-static int maybe_write_raw_frame(long frame, const uint8_t *pixels) {
+static int maybe_write_raw_frame(long frame, const uint8_t *pixels,
+                                 int width) {
   static int initialized;
   static const char *directory;
   static long from;
@@ -186,7 +196,7 @@ static int maybe_write_raw_frame(long frame, const uint8_t *pixels) {
     return 0;
   FILE *stream = fopen(path, "wb");
   if (!stream) return 0;
-  size_t size = 256u * 224u * 4u;
+  size_t size = (size_t)width * 224u * 4u;
   int ok = fwrite(pixels, 1, size, stream) == size;
   if (fclose(stream) != 0) ok = 0;
   return ok;
@@ -221,14 +231,14 @@ static int trace_wram(uint64_t frame) {
 }
 
 static void collect_video(AttractStats *stats, const uint8_t *pixels,
-                          long frame) {
+                          long frame, int width) {
   uint64_t hash = fnv1a_update(UINT64_C(14695981039346656037), pixels,
-                               256u * 224u * 4u);
+                               (size_t)width * 224u * 4u);
   if (frame && hash != stats->video_hash) stats->video_changes++;
   stats->video_hash = hash;
   const uint32_t *words = (const uint32_t *)pixels;
   uint32_t first = words[0] & 0xffffffu;
-  for (size_t i = 1; i < 256u * 224u; i++) {
+  for (size_t i = 1; i < (size_t)width * 224u; i++) {
     if ((words[i] & 0xffffffu) != first) {
       stats->video_active_frames++;
       break;
@@ -246,6 +256,50 @@ static void collect_audio(AttractStats *stats, const int16_t *audio,
     if (magnitude > stats->audio_peak) stats->audio_peak = magnitude;
   }
   if (active) stats->audio_active_frames++;
+}
+
+static int parse_input_script(InputSpan spans[kMaxInputSpans],
+                              size_t *count_out) {
+  const char *cursor = getenv("SNESRECOMP_INPUT_SCRIPT");
+  *count_out = 0;
+  if (!cursor || !cursor[0]) return 1;
+  while (*cursor) {
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == ',') cursor++;
+    if (!*cursor) break;
+    if (*count_out >= kMaxInputSpans) return 0;
+    char *end = NULL;
+    long first = strtol(cursor, &end, 0);
+    if (end == cursor || first < 0) return 0;
+    cursor = end;
+    long last = first;
+    if (*cursor == '-') {
+      cursor++;
+      last = strtol(cursor, &end, 0);
+      if (end == cursor || last < first) return 0;
+      cursor = end;
+    }
+    if (*cursor++ != ':') return 0;
+    unsigned long mask = strtoul(cursor, &end, 0);
+    if (end == cursor || mask > 0x0fffu) return 0;
+    cursor = end;
+    while (*cursor == ' ' || *cursor == '\t') cursor++;
+    if (*cursor && *cursor != ',') return 0;
+    spans[*count_out].first = first;
+    spans[*count_out].last = last;
+    spans[*count_out].mask = (uint32_t)mask;
+    (*count_out)++;
+  }
+  return 1;
+}
+
+static uint32_t scripted_input(const InputSpan *spans, size_t count,
+                               long frame) {
+  uint32_t input = 0;
+  for (size_t i = 0; i < count; i++) {
+    if (frame >= spans[i].first && frame <= spans[i].last)
+      input |= spans[i].mask;
+  }
+  return input;
 }
 
 int main(int argc, char **argv) {
@@ -284,9 +338,28 @@ int main(int argc, char **argv) {
     return 3;
   }
 
-  static uint8_t pixels[256u * 224u * 4u];
+  InputSpan input_spans[kMaxInputSpans];
+  size_t input_span_count = 0;
+  if (!parse_input_script(input_spans, &input_span_count)) {
+    fputs("invalid SNESRECOMP_INPUT_SCRIPT; expected "
+          "FIRST[-LAST]:MASK entries\n", stderr);
+    free(rom);
+    return 2;
+  }
+
+  int widescreen_extra = 0;
+  const char *wide_value = getenv("SNESRECOMP_WIDESCREEN_EXTRA");
+  if (wide_value && wide_value[0])
+    widescreen_extra = (int)strtol(wide_value, NULL, 0);
+  SmrpgSetWidescreenExtra(widescreen_extra);
+  const char *hud_value = getenv("SNESRECOMP_WIDESCREEN_HUD");
+  if (hud_value && hud_value[0])
+    SmrpgSetWidescreenHud(strtol(hud_value, NULL, 0) != 0);
+  int frame_width = SmrpgWidescreenWidth();
+
+  static uint8_t pixels[kPpuBufWidth * 224u * 4u];
   int16_t audio[534 * 2];
-  SmrpgBeginDrawing(pixels, 256u * 4u);
+  SmrpgBeginDrawing(pixels, (size_t)frame_width * 4u);
   AttractStats stats = {0};
   WavWriter wav;
   if (!wav_open(&wav, getenv("SNESRECOMP_WAV"))) {
@@ -297,7 +370,7 @@ int main(int argc, char **argv) {
   double audio_accumulator = 0.0;
 
   for (long frame = 0; frame < frame_limit; frame++) {
-    (void)RtlRunFrame(0);
+    (void)RtlRunFrame(scripted_input(input_spans, input_span_count, frame));
     if (g_fail || !SmrpgLastLleResult()) {
       fprintf(stderr, "smrpg_native: runtime failure frame=%ld pc=$%06x\n",
               frame, (unsigned)SmrpgResumePc());
@@ -317,8 +390,8 @@ int main(int argc, char **argv) {
     }
 
     SmrpgDrawPpuFrame();
-    collect_video(&stats, pixels, frame);
-    if (!maybe_write_raw_frame(frame, pixels)) {
+    collect_video(&stats, pixels, frame, frame_width);
+    if (!maybe_write_raw_frame(frame, pixels, frame_width)) {
       fputs("unable to write raw frame capture\n", stderr);
       wav_close(&wav);
       free(rom);
@@ -340,7 +413,8 @@ int main(int argc, char **argv) {
   }
 
   int output_ok = wav_close(&wav) &&
-                  write_ppm(getenv("SNESRECOMP_FRAME_DUMP"), pixels) &&
+                  write_ppm(getenv("SNESRECOMP_FRAME_DUMP"), pixels,
+                            frame_width) &&
                   write_wram_dump(getenv("SNESRECOMP_WRAM_DUMP"));
   Sa1 *sa1 = g_snes->cart->sa1;
   uint64_t sa1_instructions =

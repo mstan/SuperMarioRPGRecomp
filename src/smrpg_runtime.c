@@ -8,6 +8,7 @@
 #include "snes/ppu.h"
 #include "snes/sa1.h"
 #include "snes/snes.h"
+#include "widescreen.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -29,6 +30,10 @@ static uint64_t s_next_frame_master;
 static unsigned s_host_frames;
 static int s_last_lle_result = 1;
 static uint8_t s_frame_hdmaen;
+
+bool g_ws_active = false;
+int g_ws_extra = 0;
+static bool s_widescreen_hud = true;
 
 static uint16_t read_vector(uint16_t address) {
   uint8_t low = cpu_read8(&g_cpu, 0, address);
@@ -191,12 +196,69 @@ static void run_one_frame(void) {
 }
 
 void SmrpgBeginDrawing(uint8_t *pixels, size_t pitch) {
-  PpuBeginDrawing(g_ppu, pixels, pitch, 0);
+  PpuBeginDrawing(g_ppu, pixels, pitch,
+                  g_ws_active ? kPpuRenderFlags_NoSpriteLimits : 0);
+}
+
+void SmrpgSetWidescreenExtra(int extra) {
+  if (extra < 0) extra = 0;
+  if (extra > kWsExtraMax) extra = kWsExtraMax;
+  g_ws_extra = extra;
+  g_ws_active = extra > 0;
+}
+
+void SmrpgSetWidescreenHud(bool enabled) { s_widescreen_hud = enabled; }
+
+int SmrpgWidescreenWidth(void) { return 256 + g_ws_extra * 2; }
+
+static void configure_widescreen_policy(void) {
+  if (!g_ws_active) {
+    PpuSetExtraSpace(g_ppu, 0);
+    PpuWsSetOamRightHints(g_ppu, NULL);
+    return;
+  }
+
+  /*
+   * BG1/BG2 are the isometric scene and may reveal the live side margins.
+   * BG3 remains native-width unless one of the HUD bands below explicitly
+   * anchors it. This prevents dialogue boxes and full-screen menus from
+   * repeating into the newly visible playfield.
+   */
+  bool active_play = g_ram[0x3112] == 0xff;
+  if (active_play)
+    PpuSetExtraSpace(g_ppu, (uint8_t)g_ws_extra);
+  else
+    PpuSetExtraSpaceCentered(g_ppu, (uint8_t)g_ws_extra);
+  PpuSetWidescreenLayerClamp(g_ppu, 1u << 2);
+  {
+    /*
+     * SMRPG has not yet rewritten its CPU-side OAM staging into the new
+     * right-margin coordinate range. Treat ambiguous 9-bit X values as the
+     * authentic negative-wrap sprites; otherwise native offscreen actors in
+     * $100..$15F are mistaken for widescreen-right actors and corrupt scenes.
+     */
+    static const uint8_t no_right_margin_hints[16] = {0};
+    PpuWsSetOamRightHints(g_ppu, no_right_margin_hints);
+  }
+
+  /*
+   * $7E:3112 is SMRPG's menu-accessibility latch: $FF in field/battle play,
+   * zero during the title/attract front end. In active play, BG3 owns the
+   * edge HUD groups. Anchor its outer chunks in the top and bottom bands so
+   * party status, command prompts, and right-side labels follow the adaptive
+   * viewport while the center remains at authentic coordinates.
+   */
+  if (active_play && s_widescreen_hud) {
+    PpuSetWidescreenLayerAnchorBandSlot(g_ppu, 0, 2, 0, 72, 112, 160);
+    PpuSetWidescreenLayerAnchorBandSlot(g_ppu, 1, 2, 152, 224, 112, 160);
+  }
 }
 
 void SmrpgDrawPpuFrame(void) {
   SimpleHdma channels[8];
   bool active[8] = {false};
+
+  configure_widescreen_policy();
   dma_startDma(g_dma, s_frame_hdmaen, true);
   for (int channel = 0; channel < 8; channel++) {
     SimpleHdma_Init(&channels[channel], &g_dma->channel[channel]);

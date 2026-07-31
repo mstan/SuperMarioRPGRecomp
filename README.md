@@ -36,20 +36,40 @@ The headless host verifies the ROM before boot. It reports independent logic,
 video, audio, and SA-1 activity metrics and returns nonzero on a runtime error
 or failed attract-soak thresholds. Set `SNESRECOMP_FRAME_DUMP=frame.ppm` for
 the final frame or `SNESRECOMP_WAV=attract.wav` for audio capture.
+For deterministic interaction tests, `SNESRECOMP_INPUT_SCRIPT` accepts
+comma-separated `FIRST[-LAST]:MASK` spans (for example, `900:0x8` taps Start).
+`SNESRECOMP_WIDESCREEN_EXTRA=71` makes headless captures use a 398-pixel
+adaptive framebuffer; set `SNESRECOMP_WIDESCREEN_HUD=0` to compare the
+unanchored HUD policy.
+
+Every clean exit writes `tier2_coverage.json` (override the path with
+`SNESRECOMP_TIER2_MANIFEST`). The vetted attract profile is checked in at
+`recomp/tier2_coverage.json`; `tools/regen.sh` automatically passes it to the
+analyzer so observed interpreter entries are promoted to optional AOT roots.
+The profile deliberately retains bailout evidence from trial promotion so an
+entry that proved unsafe as a standalone C boundary is not selected again.
+The current generation contains 2 exact AOT variants and 103 LLE variants.
 
 The desktop host supports keyboard and game-controller input. Keyboard
 bindings are arrows for the D-pad, `Z`/`X` for B/A, `A`/`S` for Y/X,
 `Q`/`W` for L/R, Enter for Start, and Right Shift for Select. Press `P` to
 pause, `F5`/`F9` to save/load, `F11` for fullscreen, or Escape to quit.
 
+Enable **Adaptive view** in the recomp-ui launcher to make the logical width
+follow the live window or fullscreen aspect ratio. The isometric BG1/BG2 scene
+reveals additional columns instead of stretching. Native-width menus and
+dialogue remain centered; during field and battle play, the outer BG3 HUD
+groups anchor to the expanded viewport edges.
+
 ## Qualification
 
-The canonical US ROM completed an unattended 18,000-frame run (about five
-guest minutes and a complete return through the attract loop):
+The coverage-guided AOT build completed an unattended 18,000-frame run of the
+canonical US ROM (about five guest minutes and a complete return through the
+attract loop):
 
-- 946,872,185 SA-1 instructions
+- 945,954,864 SA-1 instructions
 - 17,861 frames with a changed logic-state hash
-- 15,850 active-video frames and 11,021 video changes
+- 15,850 active-video frames and 11,037 video changes
 - 17,375 active-audio frames; captured output measured -21.1 dB mean and
   -5.0 dB peak
 - no runtime failure, scheduler cap, IRQ storm, or logic/video/audio activity

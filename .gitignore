@@ -2,8 +2,12 @@ build*/
 src/gen/
 smrpg.sfc
 *.sav
+*.srm
+/saves/
+/rom.cfg
+/keybinds.ini
 *.wav
 *.ppm
 captures/
-tier2_coverage.json
+/tier2_coverage.json
 snesref_trace.jsonl

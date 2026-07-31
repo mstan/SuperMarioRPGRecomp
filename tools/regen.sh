@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
-SNESRECOMP_ROOT="${SNESRECOMP_ROOT:-F:/Projects/snesrecomp/_wt_smrpg_sa1_snesrecomp}"
+SNESRECOMP_ROOT="${SNESRECOMP_ROOT:-../_wt_smrpg_sa1_snesrecomp}"
 EXPECTED_SHA256="740646f3535bfb365ca44e70d46ab433467b142bd84010393070bd0b141af853"
 
 if [ -z "$PYTHON" ] || [ ! -f "$SNESRECOMP_ROOT/tools/v2_emit.py" ]; then
@@ -29,8 +29,22 @@ if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
 fi
 
 "$PYTHON" "$SNESRECOMP_ROOT/tools/build_native_analyzer.py"
+
+# Clean interpreter discoveries harvested from a real run become optional AOT
+# roots on the next regeneration. They never replace the interpreter fallback,
+# and v2_emit rejects any tuple that is not safe to materialize.
+PROFILE_MANIFEST="recomp/tier2_coverage.json"
+emit_extra=()
+if [ -f "$PROFILE_MANIFEST" ]; then
+  emit_extra+=(--profile-manifest "$PROFILE_MANIFEST")
+  echo "regen.sh: using AOT coverage profile $PROFILE_MANIFEST"
+else
+  echo "regen.sh: no AOT coverage profile yet; run the headless host to harvest one"
+fi
+
 "$PYTHON" "$SNESRECOMP_ROOT/tools/v2_emit.py" --rom smrpg.sfc \
   --cfg-dir recomp --out-dir src/gen --cfg-roots --no-host-root-scan \
-  --analysis-backend native
+  --analysis-backend native \
+  "${emit_extra[@]+"${emit_extra[@]}"}"
 "$PYTHON" "$SNESRECOMP_ROOT/tools/v2_sync_funcs_h.py" \
   --cfg-dir recomp --out recomp/funcs.h
