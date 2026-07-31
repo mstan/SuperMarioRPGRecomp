@@ -1,0 +1,9 @@
+build*/
+src/gen/
+smrpg.sfc
+*.sav
+*.wav
+*.ppm
+captures/
+tier2_coverage.json
+snesref_trace.jsonl
