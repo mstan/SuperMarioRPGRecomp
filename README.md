@@ -28,6 +28,7 @@ bash tools/regen.sh
 cmake -S . -B build -G Ninja `
   -DSNESRECOMP_ROOT=F:/Projects/snesrecomp/_wt_smrpg_sa1_snesrecomp
 cmake --build build --parallel
+.\build\SuperMarioRPGSNESRecomp.exe .\smrpg.sfc
 .\build\SuperMarioRPGSNESRecompHeadless.exe .\smrpg.sfc 36000
 ```
 
@@ -35,6 +36,11 @@ The headless host verifies the ROM before boot. It reports independent logic,
 video, audio, and SA-1 activity metrics and returns nonzero on a runtime error
 or failed attract-soak thresholds. Set `SNESRECOMP_FRAME_DUMP=frame.ppm` for
 the final frame or `SNESRECOMP_WAV=attract.wav` for audio capture.
+
+The desktop host supports keyboard and game-controller input. Keyboard
+bindings are arrows for the D-pad, `Z`/`X` for B/A, `A`/`S` for Y/X,
+`Q`/`W` for L/R, Enter for Start, and Right Shift for Select. Press `P` to
+pause, `F5`/`F9` to save/load, `F11` for fullscreen, or Escape to quit.
 
 ## Qualification
 

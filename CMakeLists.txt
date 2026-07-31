@@ -4,6 +4,8 @@ set(CMAKE_C_STANDARD 11)
 
 set(SNESRECOMP_ROOT "${CMAKE_SOURCE_DIR}/snesrecomp" CACHE PATH
     "Path to the SA-1-capable snesrecomp checkout")
+set(SNESRECOMP_SDL_BACKEND "SDL2" CACHE STRING
+    "Desktop SDL backend (the SMRPG host currently uses SDL2)")
 include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 
 file(GLOB SMRPG_GEN_SOURCES CONFIGURE_DEPENDS
@@ -25,18 +27,30 @@ add_executable(SuperMarioRPGSNESRecompHeadless
     src/headless_main.c
     src/smrpg_runtime.c)
 
-target_include_directories(SuperMarioRPGSNESRecompHeadless PRIVATE
-    "${CMAKE_SOURCE_DIR}/src"
-    "${CMAKE_SOURCE_DIR}/recomp"
-    ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
-target_compile_definitions(SuperMarioRPGSNESRecompHeadless PRIVATE
-    SYSTEM_VOLUME_MIXER_AVAILABLE=0
-    SNESRECOMP_TRACE=$<BOOL:${SNESRECOMP_ENABLE_TRACE}>
-    SNESRECOMP_REVERSE_DEBUG=0)
-if(NOT MSVC)
-    target_compile_options(SuperMarioRPGSNESRecompHeadless PRIVATE
-        -w -Wno-implicit-function-declaration)
-    target_link_libraries(SuperMarioRPGSNESRecompHeadless PRIVATE m)
-endif()
-target_link_libraries(SuperMarioRPGSNESRecompHeadless PRIVATE
-    ${SNESRECOMP_RUNNER_LIBRARIES})
+add_executable(SuperMarioRPGSNESRecomp
+    ${SNESRECOMP_RUNNER_SOURCES}
+    ${SMRPG_GEN_SOURCES}
+    src/sdl_main.c
+    src/smrpg_runtime.c)
+
+function(configure_smrpg_target target)
+    target_include_directories(${target} PRIVATE
+        "${CMAKE_SOURCE_DIR}/src"
+        "${CMAKE_SOURCE_DIR}/recomp"
+        ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+    target_compile_definitions(${target} PRIVATE
+        SYSTEM_VOLUME_MIXER_AVAILABLE=0
+        SNESRECOMP_TRACE=$<BOOL:${SNESRECOMP_ENABLE_TRACE}>
+        SNESRECOMP_REVERSE_DEBUG=0)
+    if(NOT MSVC)
+        target_compile_options(${target} PRIVATE
+            -w -Wno-implicit-function-declaration)
+        target_link_libraries(${target} PRIVATE m)
+    endif()
+    target_link_libraries(${target} PRIVATE
+        ${SNESRECOMP_RUNNER_LIBRARIES})
+endfunction()
+
+configure_smrpg_target(SuperMarioRPGSNESRecompHeadless)
+configure_smrpg_target(SuperMarioRPGSNESRecomp)
+snesrecomp_target_sdl(SuperMarioRPGSNESRecomp)
