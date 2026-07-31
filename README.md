@@ -53,7 +53,9 @@ The current generation contains 2 exact AOT variants and 103 LLE variants.
 The desktop host supports keyboard and game-controller input. Keyboard
 bindings are arrows for the D-pad, `Z`/`X` for B/A, `A`/`S` for Y/X,
 `Q`/`W` for L/R, Enter for Start, and Right Shift for Select. Press `P` to
-pause, `F5`/`F9` to save/load, `F11` for fullscreen, or Escape to quit.
+pause, `F5` or `F6` to save state slot 0, `F7` or `F9` to load it, `F11` for
+fullscreen, or Escape to quit. The window title confirms whether the state
+operation succeeded.
 
 Enable **Adaptive view** in the recomp-ui launcher to make the logical width
 follow the live window or fullscreen aspect ratio. The isometric BG1/BG2 scene

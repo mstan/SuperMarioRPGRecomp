@@ -337,6 +337,9 @@ int main(int argc, char **argv) {
     free(rom);
     return 3;
   }
+  const char *save_root = getenv("SNESRECOMP_SAVE_ROOT");
+  if (save_root && save_root[0]) RtlSetSaveRoot(save_root);
+  RtlReadSram();
 
   InputSpan input_spans[kMaxInputSpans];
   size_t input_span_count = 0;
@@ -368,6 +371,14 @@ int main(int argc, char **argv) {
     return 4;
   }
   double audio_accumulator = 0.0;
+  long save_state_frame = -1;
+  long load_state_frame = -1;
+  const char *state_value = getenv("SNESRECOMP_SAVE_STATE_FRAME");
+  if (state_value && state_value[0])
+    save_state_frame = strtol(state_value, NULL, 0);
+  state_value = getenv("SNESRECOMP_LOAD_STATE_FRAME");
+  if (state_value && state_value[0])
+    load_state_frame = strtol(state_value, NULL, 0);
 
   for (long frame = 0; frame < frame_limit; frame++) {
     (void)RtlRunFrame(scripted_input(input_spans, input_span_count, frame));
@@ -378,6 +389,8 @@ int main(int argc, char **argv) {
       free(rom);
       return 5;
     }
+    if (frame == save_state_frame) RtlSaveLoad(kSaveLoad_Save, 0);
+    if (frame == load_state_frame) RtlSaveLoad(kSaveLoad_Load, 0);
 
     uint64_t next_logic = logic_hash();
     if (frame && next_logic != stats.logic_hash) stats.logic_changes++;

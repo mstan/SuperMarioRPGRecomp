@@ -37,6 +37,10 @@ static const char *const kSmrpgSha1[] = {
 
 bool g_new_ppu = true;
 static SDL_mutex *g_audio_mutex;
+static const char kWindowTitle[] =
+    "Super Mario RPG: Legend of the Seven Stars";
+static int s_state_save_was_down;
+static int s_state_load_was_down;
 
 static void spc_initialize(SpcPlayer *player) { (void)player; }
 static void spc_upload(SpcPlayer *player, const uint8_t *data) {
@@ -293,6 +297,45 @@ static int write_frame_bmp(const char *path, const uint8_t *pixels,
   return ok;
 }
 
+static void set_state_feedback(SDL_Window *window, const char *operation,
+                               int ok, Uint32 *until) {
+  char title[192];
+  snprintf(title, sizeof(title), "%s - State %s %s (slot 0)",
+           kWindowTitle, operation, ok ? "succeeded" : "failed");
+  SDL_SetWindowTitle(window, title);
+  *until = SDL_GetTicks() + 2500u;
+}
+
+static void perform_state_action(SDL_Window *window, int save,
+                                 Uint32 *feedback_until) {
+  char path[128];
+  if (save) RtlEnsureSaveDir();
+  RtlSaveSlotPath(0, path, sizeof(path));
+  set_state_feedback(window, save ? "save" : "load",
+                     save ? RtlSaveSnapshot(path) : RtlLoadSnapshot(path),
+                     feedback_until);
+}
+
+static void update_state_hotkeys(SDL_Window *window, Uint32 *feedback_until) {
+  const Uint8 *keys = SDL_GetKeyboardState(NULL);
+  int save_is_down =
+      keys[SDL_SCANCODE_F5] || keys[SDL_SCANCODE_F6];
+  int load_is_down =
+      keys[SDL_SCANCODE_F7] || keys[SDL_SCANCODE_F9];
+
+  if (save_is_down && !s_state_save_was_down)
+    perform_state_action(window, 1, feedback_until);
+  if (load_is_down && !s_state_load_was_down)
+    perform_state_action(window, 0, feedback_until);
+  s_state_save_was_down = save_is_down;
+  s_state_load_was_down = load_is_down;
+
+  if (*feedback_until && SDL_TICKS_PASSED(SDL_GetTicks(), *feedback_until)) {
+    SDL_SetWindowTitle(window, kWindowTitle);
+    *feedback_until = 0;
+  }
+}
+
 static int adaptive_extra_for_size(int drawable_width, int drawable_height) {
   if (drawable_width <= 0 || drawable_height <= 0) return 0;
   int64_t numerator = (int64_t)drawable_width * kFrameHeight -
@@ -351,7 +394,7 @@ int main(int argc, char **argv) {
   RtlReadSram();
 
   SDL_Window *window =
-      SDL_CreateWindow("Super Mario RPG: Legend of the Seven Stars",
+      SDL_CreateWindow(kWindowTitle,
                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                        launcher_settings.adaptive_view ? 960 : 768,
                        launcher_settings.adaptive_view ? 540 : 576,
@@ -396,6 +439,7 @@ int main(int argc, char **argv) {
 
   int running = 1;
   int paused = 0;
+  Uint32 state_feedback_until = 0;
   long frames = 0;
   long auto_close_frames = 0;
   const char *auto_close = getenv("SNESRECOMP_AUTOCLOSE_FRAMES");
@@ -418,10 +462,14 @@ int main(int argc, char **argv) {
             SDL_PauseAudioDevice(audio, paused);
             break;
           case SDLK_F5:
-            RtlSaveLoad(kSaveLoad_Save, 0);
+          case SDLK_F6:
+            perform_state_action(window, 1, &state_feedback_until);
+            s_state_save_was_down = 1;
             break;
+          case SDLK_F7:
           case SDLK_F9:
-            RtlSaveLoad(kSaveLoad_Load, 0);
+            perform_state_action(window, 0, &state_feedback_until);
+            s_state_load_was_down = 1;
             break;
           case SDLK_F11: {
             Uint32 flags = SDL_GetWindowFlags(window);
@@ -437,6 +485,7 @@ int main(int argc, char **argv) {
       }
     }
 
+    update_state_hotkeys(window, &state_feedback_until);
     logical_width = update_adaptive_widescreen(
         renderer, launcher_settings.adaptive_view, pixels);
     if (!paused) {

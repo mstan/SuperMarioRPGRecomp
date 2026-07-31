@@ -7,6 +7,7 @@
 #include "snes/interp_bridge.h"
 #include "snes/ppu.h"
 #include "snes/sa1.h"
+#include "snes/saveload.h"
 #include "snes/snes.h"
 #include "widescreen.h"
 
@@ -30,6 +31,7 @@ static uint64_t s_next_frame_master;
 static unsigned s_host_frames;
 static int s_last_lle_result = 1;
 static uint8_t s_frame_hdmaen;
+static bool s_loaded_runtime_state;
 
 bool g_ws_active = false;
 int g_ws_extra = 0;
@@ -224,7 +226,15 @@ static void configure_widescreen_policy(void) {
    * anchors it. This prevents dialogue boxes and full-screen menus from
    * repeating into the newly visible playfield.
    */
-  bool active_play = g_ram[0x3112] == 0xff;
+  /*
+   * $7E:0998 is the top-level presentation state. Field play uses the $40
+   * family (Bowser's Keep begins at $41); battle uses the $80 family. The
+   * title/attract front end stays in $00 and full-screen interfaces use the
+   * $20 family. Do not use $7E:3112 here: it is a menu-accessibility flag and
+   * is deliberately disabled during several playable intro rooms.
+   */
+  uint8_t presentation_state = g_ram[0x0998];
+  bool active_play = (presentation_state & 0xc0u) != 0;
   if (active_play)
     PpuSetExtraSpace(g_ppu, (uint8_t)g_ws_extra);
   else
@@ -242,11 +252,10 @@ static void configure_widescreen_policy(void) {
   }
 
   /*
-   * $7E:3112 is SMRPG's menu-accessibility latch: $FF in field/battle play,
-   * zero during the title/attract front end. In active play, BG3 owns the
-   * edge HUD groups. Anchor its outer chunks in the top and bottom bands so
-   * party status, command prompts, and right-side labels follow the adaptive
-   * viewport while the center remains at authentic coordinates.
+   * In active field/battle presentation states, BG3 owns the edge HUD groups.
+   * Anchor its outer chunks in the top and bottom bands so party status,
+   * command prompts, and right-side labels follow the adaptive viewport while
+   * the center remains at authentic coordinates.
    */
   if (active_play && s_widescreen_hud) {
     PpuSetWidescreenLayerAnchorBandSlot(g_ppu, 0, 2, 0, 72, 112, 160);
@@ -279,7 +288,94 @@ static void session_reset(void) {
   s_host_frames = 0;
   s_last_lle_result = 1;
   s_frame_hdmaen = 0;
+  s_loaded_runtime_state = false;
   interp_bridge_set_master_deadline(0);
+}
+
+enum {
+  kSmrpgStateMagic = 0x47525053u, /* "SPRG" */
+  kSmrpgStateVersion = 1u,
+};
+
+typedef struct SmrpgRuntimeState {
+  uint32_t magic;
+  uint32_t version;
+  CpuState cpu;
+  uint32_t resume_pc;
+  uint64_t next_frame_master;
+  uint32_t host_frames;
+  int32_t last_lle_result;
+  uint8_t frame_hdmaen;
+  uint8_t initialized;
+  uint8_t memsel;
+  uint8_t last_hdmaen;
+  uint8_t reserved[4];
+  int32_t snes_frame;
+  uint64_t main_cpu_cycles_estimate;
+  uint64_t apu_pace_cycles_estimate;
+} SmrpgRuntimeState;
+
+static void smrpg_state_save_extra(SaveLoadInfo *sli) {
+  SmrpgRuntimeState state;
+  memset(&state, 0, sizeof(state));
+  state.magic = kSmrpgStateMagic;
+  state.version = kSmrpgStateVersion;
+  state.cpu = g_cpu;
+  /* Never persist an address-space-dependent host pointer. */
+  state.cpu.ram = NULL;
+  state.resume_pc = s_resume_pc;
+  state.next_frame_master = s_next_frame_master;
+  state.host_frames = s_host_frames;
+  state.last_lle_result = s_last_lle_result;
+  state.frame_hdmaen = s_frame_hdmaen;
+  state.initialized = s_initialized;
+  state.memsel = g_memsel;
+  state.last_hdmaen = g_snesrecomp_last_hdmaen;
+  state.snes_frame = snes_frame_counter;
+  state.main_cpu_cycles_estimate = g_main_cpu_cycles_estimate;
+  state.apu_pace_cycles_estimate = g_apu_pace_cycles_estimate;
+  sli->func(sli, &state, sizeof(state));
+}
+
+static void smrpg_state_load_extra(SaveLoadInfo *sli, uint32_t version) {
+  SmrpgRuntimeState state;
+  (void)version;
+  memset(&state, 0, sizeof(state));
+  sli->func(sli, &state, sizeof(state));
+  s_loaded_runtime_state =
+      state.magic == kSmrpgStateMagic &&
+      state.version == kSmrpgStateVersion;
+  if (!s_loaded_runtime_state) return;
+
+  g_cpu = state.cpu;
+  g_cpu.ram = g_ram;
+  s_resume_pc = state.resume_pc;
+  s_next_frame_master = state.next_frame_master;
+  s_host_frames = state.host_frames;
+  s_last_lle_result = state.last_lle_result;
+  s_frame_hdmaen = state.frame_hdmaen;
+  s_initialized = state.initialized != 0;
+  g_memsel = state.memsel;
+  g_snesrecomp_last_hdmaen = state.last_hdmaen;
+  snes_frame_counter = state.snes_frame;
+  g_main_cpu_cycles_estimate = state.main_cpu_cycles_estimate;
+  g_apu_pace_cycles_estimate = state.apu_pace_cycles_estimate;
+}
+
+static void smrpg_on_state_loaded(uint32_t version) {
+  (void)version;
+  if (!s_loaded_runtime_state) return;
+
+  /*
+   * These are host pacing cursors, not guest state. Point them at the restored
+   * counters so the first APU access cannot underflow against the future state
+   * that existed immediately before Load was pressed.
+   */
+  g_apu_last_sync_master = g_cpu.master_cycles;
+  g_apu_last_sync_cycles = g_apu_pace_cycles_estimate;
+  g_snes->beamMasterLast = g_cpu.master_cycles;
+  interp_bridge_set_master_deadline(0);
+  s_loaded_runtime_state = false;
 }
 
 static const RtlGameInfo kSmrpgGameInfo = {
@@ -288,9 +384,9 @@ static const RtlGameInfo kSmrpgGameInfo = {
     .run_frame = run_one_frame,
     .draw_ppu_frame = SmrpgDrawPpuFrame,
     .save_name_prefix = "smrpg",
-    .state_save_extra = NULL,
-    .state_load_extra = NULL,
-    .on_state_loaded = NULL,
+    .state_save_extra = smrpg_state_save_extra,
+    .state_load_extra = smrpg_state_load_extra,
+    .on_state_loaded = smrpg_on_state_loaded,
     .session_reset = session_reset,
 };
 
