@@ -45,6 +45,8 @@ typedef struct InputSpan {
 
 enum { kMaxInputSpans = 128 };
 
+void headless_install_exception_filter(void);
+
 static uint64_t fnv1a_update(uint64_t hash, const void *data, size_t size) {
   const uint8_t *bytes = (const uint8_t *)data;
   for (size_t i = 0; i < size; i++) {
@@ -303,6 +305,10 @@ static uint32_t scripted_input(const InputSpan *spans, size_t count,
 }
 
 int main(int argc, char **argv) {
+  /* Preserve the last guest-frame diagnostic if a soak terminates abnormally
+   * while stderr is redirected to a qualification log. */
+  setvbuf(stderr, NULL, _IONBF, 0);
+  headless_install_exception_filter();
   if (argc < 2 || argc > 3) {
     fprintf(stderr,
             "usage: SuperMarioRPGSNESRecompHeadless <smrpg.sfc> [frames]\n");

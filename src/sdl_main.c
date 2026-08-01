@@ -1,6 +1,8 @@
 #include "smrpg_runtime.h"
 
 #include "common_rtl.h"
+#include "cpu_trace.h"
+#include "debug_server.h"
 #include "host_report.h"
 #include "launcher_profile.h"
 #include "recomp_launcher.h"
@@ -39,8 +41,6 @@ bool g_new_ppu = true;
 static SDL_mutex *g_audio_mutex;
 static const char kWindowTitle[] =
     "Super Mario RPG: Legend of the Seven Stars";
-static int s_state_save_was_down;
-static int s_state_load_was_down;
 
 static void spc_initialize(SpcPlayer *player) { (void)player; }
 static void spc_upload(SpcPlayer *player, const uint8_t *data) {
@@ -134,6 +134,20 @@ static int resolve_rom(int argc, char **argv, char *path, size_t path_size,
   settings->deadzone[0] = 25;
   settings->adaptive_view = 1;
   settings->widescreen_hud = 1;
+  {
+    /* Match the established SNESRecomp diagnostic override. Adaptive 16:9 is
+     * the game default; the launcher or environment can select authentic
+     * native-width presentation without changing guest state. */
+    const char *widescreen = getenv("SNESRECOMP_WIDESCREEN");
+    if (widescreen && widescreen[0]) {
+      settings->adaptive_view =
+          strcmp(widescreen, "Adaptive") == 0 ||
+          strcmp(widescreen, "adaptive") == 0 ||
+          strtol(widescreen, NULL, 0) != 0;
+    }
+    const char *hud = getenv("SNESRECOMP_WIDESCREEN_HUD");
+    if (hud && hud[0]) settings->widescreen_hud = strtol(hud, NULL, 0) != 0;
+  }
 
   if (argc > 1) {
     snprintf(path, path_size, "%s", argv[1]);
@@ -298,38 +312,25 @@ static int write_frame_bmp(const char *path, const uint8_t *pixels,
 }
 
 static void set_state_feedback(SDL_Window *window, const char *operation,
-                               int ok, Uint32 *until) {
+                               int slot, int ok, Uint32 *until) {
   char title[192];
-  snprintf(title, sizeof(title), "%s - State %s %s (slot 0)",
-           kWindowTitle, operation, ok ? "succeeded" : "failed");
+  snprintf(title, sizeof(title), "%s - State %s %s (slot %d)",
+           kWindowTitle, operation, ok ? "succeeded" : "failed", slot + 1);
   SDL_SetWindowTitle(window, title);
   *until = SDL_GetTicks() + 2500u;
 }
 
 static void perform_state_action(SDL_Window *window, int save,
-                                 Uint32 *feedback_until) {
+                                 int slot, Uint32 *feedback_until) {
   char path[128];
   if (save) RtlEnsureSaveDir();
-  RtlSaveSlotPath(0, path, sizeof(path));
-  set_state_feedback(window, save ? "save" : "load",
+  RtlSaveSlotPath(slot, path, sizeof(path));
+  set_state_feedback(window, save ? "save" : "load", slot,
                      save ? RtlSaveSnapshot(path) : RtlLoadSnapshot(path),
                      feedback_until);
 }
 
-static void update_state_hotkeys(SDL_Window *window, Uint32 *feedback_until) {
-  const Uint8 *keys = SDL_GetKeyboardState(NULL);
-  int save_is_down =
-      keys[SDL_SCANCODE_F5] || keys[SDL_SCANCODE_F6];
-  int load_is_down =
-      keys[SDL_SCANCODE_F7] || keys[SDL_SCANCODE_F9];
-
-  if (save_is_down && !s_state_save_was_down)
-    perform_state_action(window, 1, feedback_until);
-  if (load_is_down && !s_state_load_was_down)
-    perform_state_action(window, 0, feedback_until);
-  s_state_save_was_down = save_is_down;
-  s_state_load_was_down = load_is_down;
-
+static void update_state_feedback(SDL_Window *window, Uint32 *feedback_until) {
   if (*feedback_until && SDL_TICKS_PASSED(SDL_GetTicks(), *feedback_until)) {
     SDL_SetWindowTitle(window, kWindowTitle);
     *feedback_until = 0;
@@ -391,6 +392,18 @@ int main(int argc, char **argv) {
   RtlRegisterGame(SmrpgGameInfo());
   if (!SnesInit(rom, (int)rom_size) || !cart_has_sa1(g_snes->cart))
     Die("SNESRecomp rejected the SA-1 cartridge");
+  cpu_trace_init();
+  debug_server_set_ram(g_snes->ram, 0x20000);
+  {
+    int debug_port = 4381;
+    const char *port_value = getenv("SNESRECOMP_DEBUG_PORT");
+    if (port_value && port_value[0]) {
+      long parsed = strtol(port_value, NULL, 0);
+      if (parsed > 0 && parsed <= 65535) debug_port = (int)parsed;
+    }
+    if (debug_server_init(debug_port) == 0)
+      fprintf(stderr, "[smrpg] Debug server ready on port %d\n", debug_port);
+  }
   RtlReadSram();
 
   SDL_Window *window =
@@ -453,6 +466,14 @@ int main(int argc, char **argv) {
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT) running = 0;
       if (event.type == SDL_KEYDOWN && !event.key.repeat) {
+        if (event.key.keysym.sym >= SDLK_F1 &&
+            event.key.keysym.sym <= SDLK_F12) {
+          int slot = (int)(event.key.keysym.sym - SDLK_F1);
+          perform_state_action(
+              window, (event.key.keysym.mod & KMOD_SHIFT) != 0, slot,
+              &state_feedback_until);
+          continue;
+        }
         switch (event.key.keysym.sym) {
           case SDLK_ESCAPE:
             running = 0;
@@ -461,17 +482,8 @@ int main(int argc, char **argv) {
             paused = !paused;
             SDL_PauseAudioDevice(audio, paused);
             break;
-          case SDLK_F5:
-          case SDLK_F6:
-            perform_state_action(window, 1, &state_feedback_until);
-            s_state_save_was_down = 1;
-            break;
-          case SDLK_F7:
-          case SDLK_F9:
-            perform_state_action(window, 0, &state_feedback_until);
-            s_state_load_was_down = 1;
-            break;
-          case SDLK_F11: {
+          case SDLK_RETURN: {
+            if (!(event.key.keysym.mod & KMOD_ALT)) break;
             Uint32 flags = SDL_GetWindowFlags(window);
             SDL_SetWindowFullscreen(
                 window, (flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
@@ -485,12 +497,23 @@ int main(int argc, char **argv) {
       }
     }
 
-    update_state_hotkeys(window, &state_feedback_until);
+    update_state_feedback(window, &state_feedback_until);
+    {
+      int slot = debug_server_consume_loadstate();
+      if (slot >= 0) perform_state_action(
+          window, 0, slot, &state_feedback_until);
+      slot = debug_server_consume_savestate();
+      if (slot >= 0) perform_state_action(
+          window, 1, slot, &state_feedback_until);
+    }
+    debug_server_wait_if_paused();
     logical_width = update_adaptive_widescreen(
         renderer, launcher_settings.adaptive_view, pixels);
     if (!paused) {
       uint32_t input =
-          keyboard_input() | controller_input(pad) | (1u << 30);
+          keyboard_input() | controller_input(pad) |
+          debug_server_get_controller_inputs() |
+          (1u << 30) | debug_server_get_controller_active_mask();
       (void)RtlRunFrame(input);
       if (g_fail || !SmrpgLastLleResult())
         Die("Super Mario RPG runtime execution failed");
@@ -514,6 +537,7 @@ int main(int argc, char **argv) {
   if (!write_frame_bmp(frame_dump, pixels, logical_width, kFrameHeight))
     fprintf(stderr, "Unable to write frame dump: %s\n", frame_dump);
   RtlWriteSram();
+  debug_server_shutdown();
   SDL_PauseAudioDevice(audio, 1);
   SDL_CloseAudioDevice(audio);
   if (pad) SDL_GameControllerClose(pad);

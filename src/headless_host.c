@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 bool g_new_ppu = true;
 
 static void headless_spc_initialize(SpcPlayer *player) { (void)player; }
@@ -52,3 +56,36 @@ const char *host_report_preserve_crash_copy(const char *path) {
   return NULL;
 }
 void host_report_crash_test_tick(void) {}
+
+#ifdef _WIN32
+static LONG WINAPI headless_exception_filter(EXCEPTION_POINTERS *exception) {
+  const CONTEXT *context =
+      exception && exception->ContextRecord ? exception->ContextRecord : NULL;
+  const EXCEPTION_RECORD *record =
+      exception ? exception->ExceptionRecord : NULL;
+  const uintptr_t image_base = (uintptr_t)GetModuleHandleW(NULL);
+  const uintptr_t instruction =
+      context ? (uintptr_t)context->Rip : (uintptr_t)0;
+  fprintf(stderr,
+          "headless exception: code=0x%08lx address=%p rip=0x%llx "
+          "image=0x%llx rva=0x%llx "
+          "rsp=0x%llx rbp=0x%llx\n",
+          record ? (unsigned long)record->ExceptionCode : 0ul,
+          record ? record->ExceptionAddress : NULL,
+          context ? (unsigned long long)context->Rip : 0ull,
+          (unsigned long long)image_base,
+          instruction >= image_base
+              ? (unsigned long long)(instruction - image_base)
+              : 0ull,
+          context ? (unsigned long long)context->Rsp : 0ull,
+          context ? (unsigned long long)context->Rbp : 0ull);
+  fflush(stderr);
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
+void headless_install_exception_filter(void) {
+#ifdef _WIN32
+  SetUnhandledExceptionFilter(headless_exception_filter);
+#endif
+}

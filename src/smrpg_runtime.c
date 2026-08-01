@@ -9,6 +9,7 @@
 #include "snes/sa1.h"
 #include "snes/saveload.h"
 #include "snes/snes.h"
+#include "snes/ws_shadow.h"
 #include "widescreen.h"
 
 #include <stdbool.h>
@@ -36,6 +37,448 @@ static bool s_loaded_runtime_state;
 bool g_ws_active = false;
 int g_ws_extra = 0;
 static bool s_widescreen_hud = true;
+
+enum {
+  kSmrpgMapSubtiles = 128,
+  kSmrpgShadowBaseTile = 256,
+  kSmrpgShadowBasePixel = kSmrpgShadowBaseTile * 8,
+  kSmrpgMapL1Offset = 0x10000,
+  kSmrpgMapL2Offset = 0x12000,
+  kSmrpgTilesL1Offset = 0x15000,
+  kSmrpgTilesL2Offset = 0x16000,
+};
+
+typedef struct SmrpgFieldMap {
+  bool valid;
+  bool have_x_bounds;
+  bool have_hint;
+  bool have_scroll;
+  uint8_t bound_x0;
+  uint8_t bound_x1;
+  uint8_t source_x;
+  uint8_t source_y;
+  uint8_t hint_x;
+  uint8_t hint_y;
+  uint8_t hint_mask;
+  uint8_t physical_x;
+  uint8_t physical_y;
+  uint16_t last_hscroll;
+  uint16_t last_vscroll;
+  uint32_t assignment_signature;
+  unsigned exact_score;
+  unsigned signal_score;
+} SmrpgFieldMap;
+
+static SmrpgFieldMap s_field_map;
+
+static uint16_t read_ram16(size_t offset) {
+  return (uint16_t)(g_ram[offset] | ((uint16_t)g_ram[offset + 1] << 8));
+}
+
+static uint16_t smrpg_full_map_tile(int layer, unsigned x, unsigned y) {
+  const size_t map_offset =
+      layer == 0 ? kSmrpgMapL1Offset : kSmrpgMapL2Offset;
+  const size_t tiles_offset =
+      layer == 0 ? kSmrpgTilesL1Offset : kSmrpgTilesL2Offset;
+  const unsigned metatile_x = x >> 1;
+  const unsigned metatile_y = y >> 1;
+  const size_t map_word =
+      map_offset + ((size_t)metatile_y * 64 + metatile_x) * 2;
+  const unsigned metatile = read_ram16(map_word) & 0x01ffu;
+  const size_t tile_word =
+      tiles_offset + (size_t)metatile * 8 +
+      (size_t)(y & 1u) * 4 + (size_t)(x & 1u) * 2;
+  return read_ram16(tile_word);
+}
+
+static bool smrpg_is_signal_tile(uint16_t tile) {
+  return tile != 0x0000u && tile != 0x0100u &&
+         tile != 0x0900u && tile != 0x2000u &&
+         tile != 0x2100u;
+}
+
+static int smrpg_current_area(void);
+
+static bool smrpg_read_field_x_bounds(void) {
+  Sa1 *sa1 = g_snes && g_snes->cart ? g_snes->cart->sa1 : NULL;
+  uint8_t *bounds = sa1 ? sa1_cpu_memory_ptr(sa1, 0, 0x3120u) : NULL;
+  if (!bounds)
+    return false;
+
+  /*
+   * SMRPG's field loader publishes the assignment's horizontal 16-pixel
+   * mask in SA-1 IRAM $3120/$3124; the high edge was made exclusive by the
+   * loader. The expanded maps use 8-pixel subtiles, hence the factor of two.
+   * The vertical mask is in the field engine's wrapped/projected coordinate
+   * space and must not be applied directly to expanded-map Y.
+   */
+  const unsigned x0 = (unsigned)bounds[0] * 2u;
+  const unsigned x1 = (unsigned)bounds[4] * 2u;
+  if (x1 < x0 + 16u || x1 > kSmrpgMapSubtiles)
+    return false;
+  /*
+   * 0..64 is the loader's default unlocked full-map mask rather than a
+   * per-room boundary. It is still safe to match: margin publication is
+   * filtered to authored tiles connected to the visible viewport, so packed
+   * neighboring rooms remain hidden across intervening voids.
+   */
+  s_field_map.have_x_bounds = true;
+  s_field_map.bound_x0 = (uint8_t)x0;
+  s_field_map.bound_x1 = (uint8_t)x1;
+  return true;
+}
+
+static void smrpg_score_map_viewport(unsigned physical_tile_x,
+                                     unsigned physical_tile_y,
+                                     unsigned camera_x,
+                                     unsigned camera_y,
+                                     unsigned *exact_out,
+                                     unsigned *signal_out) {
+  unsigned exact = 0;
+  unsigned signal = 0;
+  for (int layer = 0; layer < 2; layer++) {
+    const unsigned map_base = (unsigned)PPU_bgTilemapAdr(g_ppu, layer);
+    for (unsigned y = 0; y < 28; y++) {
+      for (unsigned x = 0; x < 32; x++) {
+        const uint16_t actual =
+            g_ppu->vram[
+                (map_base + ((physical_tile_y + y) & 31u) * 32 +
+                 ((physical_tile_x + x) & 31u)) &
+                0x7fffu];
+        const uint16_t expected =
+            smrpg_full_map_tile(layer, camera_x + x, camera_y + y);
+        if (actual == expected) {
+          exact++;
+          if (smrpg_is_signal_tile(actual)) signal++;
+        }
+      }
+    }
+  }
+  *exact_out = exact;
+  *signal_out = signal;
+}
+
+static uint32_t smrpg_assignment_signature(void) {
+  uint32_t hash = 2166136261u;
+  for (unsigned i = 0; i < 16; i++) {
+    hash ^= g_ram[0x03c0u + i];
+    hash *= 16777619u;
+  }
+  const int area = smrpg_current_area();
+  hash ^= (uint32_t)area;
+  hash *= 16777619u;
+  return hash;
+}
+
+static int smrpg_current_area(void) {
+  Sa1 *sa1 = g_snes && g_snes->cart ? g_snes->cart->sa1 : NULL;
+  uint8_t *area = sa1 ? sa1_cpu_memory_ptr(sa1, 0, 0x3030u) : NULL;
+  if (!area) return -1;
+  return area[0] | ((int)area[1] << 8);
+}
+
+static bool smrpg_find_field_map(void) {
+  const unsigned physical_tile_x =
+      ((uint16_t)g_ppu->hScroll[0] >> 3) & 31u;
+  const unsigned physical_tile_y =
+      ((uint16_t)g_ppu->vScroll[0] >> 3) & 31u;
+  const unsigned physical_x = physical_tile_x & 16u;
+  const unsigned physical_y = physical_tile_y & 16u;
+  unsigned best_exact = 0;
+  unsigned best_signal = 0;
+  unsigned best_x = 0;
+  unsigned best_y = 0;
+  const unsigned physical_offset_x = physical_tile_x - physical_x;
+  const unsigned physical_offset_y = physical_tile_y - physical_y;
+  if (!s_field_map.have_x_bounds ||
+      s_field_map.bound_x1 - s_field_map.bound_x0 < 32u)
+    return false;
+  const unsigned search_x0 =
+      s_field_map.bound_x0 > physical_offset_x
+          ? s_field_map.bound_x0
+          : physical_offset_x;
+  const unsigned search_x1 = s_field_map.bound_x1 - 32u;
+  const unsigned search_y0 = physical_offset_y;
+  const unsigned search_y1 = kSmrpgMapSubtiles - 28u;
+  if (search_x0 > search_x1 || search_y0 > search_y1)
+    return false;
+
+  if (s_field_map.have_hint && s_field_map.hint_mask == 3u) {
+    const unsigned hinted_camera_x =
+        (unsigned)s_field_map.hint_x + physical_offset_x;
+    const unsigned hinted_camera_y =
+        (unsigned)s_field_map.hint_y + physical_offset_y;
+    if (hinted_camera_x >= search_x0 &&
+        hinted_camera_x <= search_x1 &&
+        hinted_camera_y >= search_y0 &&
+        hinted_camera_y <= search_y1) {
+      smrpg_score_map_viewport(
+        physical_tile_x, physical_tile_y,
+        hinted_camera_x, hinted_camera_y,
+        &best_exact, &best_signal);
+      best_x = hinted_camera_x;
+      best_y = hinted_camera_y;
+    }
+  }
+
+  if (best_exact < 1200 || best_signal < 64) {
+    best_exact = 0;
+    best_signal = 0;
+    for (unsigned y = search_y0; y <= search_y1; y++) {
+      for (unsigned x = search_x0; x <= search_x1; x++) {
+        unsigned exact;
+        unsigned signal;
+        smrpg_score_map_viewport(
+            physical_tile_x, physical_tile_y, x, y,
+            &exact, &signal);
+        if (exact > best_exact ||
+            (exact == best_exact && signal > best_signal)) {
+          best_exact = exact;
+          best_signal = signal;
+          best_x = x;
+          best_y = y;
+        }
+      }
+    }
+  }
+
+  /*
+   * Score the complete visible 32x28 tile viewport across both layers
+   * (1792 comparisons), not one 16x16 circular quadrant. SMRPG packs several
+   * similar isometric rooms into one 128x128 expanded map; a local quadrant
+   * can match the wrong repeated room even though the full viewport cannot.
+   */
+  s_field_map.valid = best_exact >= 1200 && best_signal >= 64;
+  s_field_map.source_x = (uint8_t)(best_x - physical_offset_x);
+  s_field_map.source_y = (uint8_t)(best_y - physical_offset_y);
+  s_field_map.have_hint = false;
+  s_field_map.physical_x = (uint8_t)physical_x;
+  s_field_map.physical_y = (uint8_t)physical_y;
+  s_field_map.exact_score = best_exact;
+  s_field_map.signal_score = best_signal;
+  if (s_field_map.valid) {
+    fprintf(stderr,
+            "[smrpg-ws] area=%d quadrant=(%u,%u)->(%u,%u) "
+            "camera=(%u,%u) exact=%u/1792 signal=%u\n",
+            smrpg_current_area(), physical_x, physical_y,
+            s_field_map.source_x, s_field_map.source_y,
+            best_x, best_y, best_exact, best_signal);
+  }
+  return s_field_map.valid;
+}
+
+static bool smrpg_prepare_field_shadow(void) {
+  const uint32_t signature = smrpg_assignment_signature();
+  if (!signature) {
+    s_field_map.valid = false;
+    return false;
+  }
+
+  if (signature != s_field_map.assignment_signature) {
+    memset(&s_field_map, 0, sizeof(s_field_map));
+    s_field_map.assignment_signature = signature;
+  }
+  if (!smrpg_read_field_x_bounds()) {
+    s_field_map.valid = false;
+    return false;
+  }
+  if (s_field_map.valid &&
+      (s_field_map.source_x < s_field_map.bound_x0 ||
+       s_field_map.source_x > (unsigned)s_field_map.bound_x1 - 16u))
+    s_field_map.valid = false;
+  if (g_ppu->hScroll[0] != g_ppu->hScroll[1] ||
+      g_ppu->vScroll[0] != g_ppu->vScroll[1]) {
+    s_field_map.valid = false;
+    return false;
+  }
+
+  const unsigned physical_tile_x =
+      ((uint16_t)g_ppu->hScroll[0] >> 3) & 31u;
+  const unsigned physical_tile_y =
+      ((uint16_t)g_ppu->vScroll[0] >> 3) & 31u;
+  const unsigned physical_x = physical_tile_x & 16u;
+  const unsigned physical_y = physical_tile_y & 16u;
+  const bool quadrant_changed =
+      physical_x != s_field_map.physical_x ||
+      physical_y != s_field_map.physical_y;
+
+  if (s_field_map.valid && quadrant_changed) {
+      int delta_x =
+          (int)(((uint16_t)g_ppu->hScroll[0] -
+                 s_field_map.last_hscroll) &
+                0x03ffu);
+      int delta_y =
+          (int)(((uint16_t)g_ppu->vScroll[0] -
+                 s_field_map.last_vscroll) &
+                0x03ffu);
+      if (delta_x >= 512) delta_x -= 1024;
+      if (delta_y >= 512) delta_y -= 1024;
+      int hint_x = s_field_map.source_x;
+      int hint_y = s_field_map.source_y;
+      uint8_t hint_mask = 0;
+      if (physical_x != s_field_map.physical_x) {
+        hint_x += delta_x >= 0 ? 16 : -16;
+        if (hint_x >= s_field_map.bound_x0 &&
+            hint_x <= (int)s_field_map.bound_x1 - 16)
+          hint_mask |= 1u;
+      } else {
+        hint_mask |= 1u;
+      }
+      if (physical_y != s_field_map.physical_y) {
+        hint_y += delta_y >= 0 ? 16 : -16;
+        if (hint_y >= 0 && hint_y <= kSmrpgMapSubtiles - 16)
+          hint_mask |= 2u;
+      } else {
+        hint_mask |= 2u;
+      }
+      s_field_map.have_hint = hint_mask != 0;
+      s_field_map.hint_mask = hint_mask;
+      if (hint_mask & 1u) s_field_map.hint_x = (uint8_t)hint_x;
+      if (hint_mask & 2u) s_field_map.hint_y = (uint8_t)hint_y;
+      s_field_map.valid = false;
+  }
+  if (!s_field_map.valid && !smrpg_find_field_map()) return false;
+
+  s_field_map.have_scroll = true;
+  s_field_map.last_hscroll =
+      (uint16_t)g_ppu->hScroll[0] & 0x03ffu;
+  s_field_map.last_vscroll =
+      (uint16_t)g_ppu->vScroll[0] & 0x03ffu;
+
+  for (int layer = 0; layer < 2; layer++) {
+    const uint32_t hscroll = (uint16_t)g_ppu->hScroll[layer] & 0x03ffu;
+    const uint32_t vscroll = (uint16_t)g_ppu->vScroll[layer] & 0x03ffu;
+    const uint32_t camera_tile_x =
+        (uint32_t)s_field_map.source_x +
+        (physical_tile_x - (unsigned)s_field_map.physical_x);
+    const uint32_t camera_tile_y =
+        (uint32_t)s_field_map.source_y +
+        (physical_tile_y - (unsigned)s_field_map.physical_y);
+    const uint32_t world_x =
+        kSmrpgShadowBasePixel +
+        camera_tile_x * 8u + (hscroll & 7u);
+    const uint32_t world_y =
+        kSmrpgShadowBasePixel +
+        camera_tile_y * 8u + (vscroll & 7u);
+    WsShadowSetWorld(layer, world_x, world_y);
+    WsShadowSetScroll(layer, hscroll, vscroll);
+    WsShadowSetBlankTile(layer, 0x0100);
+  }
+  return true;
+}
+
+static void smrpg_fill_field_shadow(void) {
+  if (!s_field_map.valid) return;
+
+  static uint8_t occupied[kSmrpgMapSubtiles * kSmrpgMapSubtiles];
+  static uint8_t edge_connected[kSmrpgMapSubtiles * kSmrpgMapSubtiles];
+
+  for (int layer = 0; layer < 2; layer++) {
+    const unsigned physical_tile_y =
+        ((uint16_t)g_ppu->vScroll[layer] >> 3) & 31u;
+    const unsigned source_y0 =
+        (unsigned)s_field_map.source_y +
+        (physical_tile_y - (unsigned)s_field_map.physical_y);
+    const unsigned source_y1 =
+        source_y0 + 30u < kSmrpgMapSubtiles
+            ? source_y0 + 30u
+            : kSmrpgMapSubtiles - 1u;
+    const unsigned physical_tile_x =
+        ((uint16_t)g_ppu->hScroll[layer] >> 3) & 31u;
+    const unsigned camera_x =
+        (unsigned)s_field_map.source_x +
+        (physical_tile_x - (unsigned)s_field_map.physical_x);
+
+    if (layer == 0) {
+      memset(occupied, 0, sizeof(occupied));
+      memset(edge_connected, 0, sizeof(edge_connected));
+      for (unsigned y = source_y0; y <= source_y1; y++) {
+        for (unsigned x = s_field_map.bound_x0;
+             x < s_field_map.bound_x1; x++) {
+          occupied[y * kSmrpgMapSubtiles + x] =
+              smrpg_is_signal_tile(smrpg_full_map_tile(0, x, y)) ||
+              smrpg_is_signal_tile(smrpg_full_map_tile(1, x, y));
+        }
+      }
+
+      for (unsigned y = source_y0; y <= source_y1; y++) {
+        for (int side = 0; side < 2; side++) {
+          const int edge_x =
+              side == 0 ? (int)camera_x : (int)camera_x + 31;
+          for (int distance = 1; distance <= 10; distance++) {
+            const int x =
+                side == 0 ? edge_x - distance : edge_x + distance;
+            if (x < s_field_map.bound_x0 ||
+                x >= s_field_map.bound_x1)
+              break;
+            bool column_continues = false;
+            for (int dy = -1; dy <= 1; dy++) {
+              const int neighbor_y = (int)y + dy;
+              if (neighbor_y < (int)source_y0 ||
+                  neighbor_y > (int)source_y1)
+                continue;
+              const unsigned index =
+                  (unsigned)neighbor_y * kSmrpgMapSubtiles +
+                  (unsigned)x;
+              if (occupied[index]) {
+                column_continues = true;
+                break;
+              }
+            }
+            if (!column_continues)
+              break;
+            const unsigned index =
+                y * kSmrpgMapSubtiles + (unsigned)x;
+            if (occupied[index])
+              edge_connected[index] = 1;
+          }
+        }
+      }
+    }
+
+    for (unsigned source_y = source_y0;
+         source_y <= source_y1; source_y++) {
+      const uint32_t key_y =
+          kSmrpgShadowBaseTile + source_y;
+      for (unsigned source_x = 0;
+           source_x < kSmrpgMapSubtiles; source_x++) {
+        const uint32_t key_x =
+            kSmrpgShadowBaseTile + source_x;
+        /*
+         * The first margin chunk may share the final native-view tile when
+         * fine scroll is nonzero. Preserve the entire 33-tile viewport span
+         * before applying component filtering farther into the margins;
+         * otherwise the host boundary inserts one blank 8-pixel seam.
+         */
+        const bool overlaps_native =
+            source_x >= camera_x && source_x <= camera_x + 32u;
+        WsShadowForceTile(
+            layer, key_x, key_y,
+            source_x >= s_field_map.bound_x0 &&
+                    source_x < s_field_map.bound_x1 &&
+                    (overlaps_native ||
+                     edge_connected[
+                         source_y * kSmrpgMapSubtiles + source_x])
+                ? smrpg_full_map_tile(layer, source_x, source_y)
+                : 0x0100u);
+      }
+    }
+  }
+}
+
+static void smrpg_field_side_space(int *left_out, int *right_out) {
+  const unsigned physical_tile_x =
+      ((uint16_t)g_ppu->hScroll[0] >> 3) & 31u;
+  const uint32_t camera_tile_x =
+      (uint32_t)s_field_map.source_x +
+      (physical_tile_x - (unsigned)s_field_map.physical_x);
+  const int camera_x =
+      (int)(camera_tile_x * 8u +
+            ((uint16_t)g_ppu->hScroll[0] & 7u));
+  *left_out = camera_x - (int)s_field_map.bound_x0 * 8;
+  *right_out =
+      (int)s_field_map.bound_x1 * 8 - (camera_x + 256);
+}
 
 static uint16_t read_vector(uint16_t address) {
   uint8_t low = cpu_read8(&g_cpu, 0, address);
@@ -198,8 +641,9 @@ static void run_one_frame(void) {
 }
 
 void SmrpgBeginDrawing(uint8_t *pixels, size_t pitch) {
-  PpuBeginDrawing(g_ppu, pixels, pitch,
-                  g_ws_active ? kPpuRenderFlags_NoSpriteLimits : 0);
+  int render_flags = kPpuRenderFlags_NewRenderer;
+  if (g_ws_active) render_flags |= kPpuRenderFlags_NoSpriteLimits;
+  PpuBeginDrawing(g_ppu, pixels, pitch, render_flags);
 }
 
 void SmrpgSetWidescreenExtra(int extra) {
@@ -221,25 +665,47 @@ static void configure_widescreen_policy(void) {
   }
 
   /*
-   * BG1/BG2 are the isometric scene and may reveal the live side margins.
-   * BG3 remains native-width unless one of the HUD bands below explicitly
-   * anchors it. This prevents dialogue boxes and full-screen menus from
-   * repeating into the newly visible playfield.
+   * Field presentation is identified from the PPU contract observed through
+   * the TCP scanline debugger, rather than an inferred game WRAM variable:
+   * Mode 1, BG1/BG2/OBJ on the main screen, the same layers windowed, and
+   * inverted Window 1 selected for BG1/BG2/OBJ plus the color window. SMRPG's
+   * visible field lines then drive W1 to 8..247 with HDMA.
+   *
+   * This signature is deliberately presentation-only. Menus and bounded
+   * screens stay centered until their own signatures have been validated.
    */
-  /*
-   * $7E:0998 is the top-level presentation state. Field play uses the $40
-   * family (Bowser's Keep begins at $41); battle uses the $80 family. The
-   * title/attract front end stays in $00 and full-screen interfaces use the
-   * $20 family. Do not use $7E:3112 here: it is a menu-accessibility flag and
-   * is deliberately disabled during several playable intro rooms.
-   */
-  uint8_t presentation_state = g_ram[0x0998];
-  bool active_play = (presentation_state & 0xc0u) != 0;
-  if (active_play)
-    PpuSetExtraSpace(g_ppu, (uint8_t)g_ws_extra);
-  else
-    PpuSetExtraSpaceCentered(g_ppu, (uint8_t)g_ws_extra);
+  const bool field_play =
+      (g_ppu->bgmode & 7u) == 1 &&
+      g_ppu->screenEnabled[0] == 0x13 &&
+      g_ppu->screenWindowed[0] == 0x13 &&
+      g_ppu->windowsel == 0x00330333u;
+  const bool battle_play =
+      (g_ppu->bgmode & 7u) == 1 &&
+      (g_ppu->screenEnabled[0] & 0x11u) == 0x11u &&
+      g_ppu->screenWindowed[0] == 0 &&
+      g_ppu->windowsel == 0 &&
+      g_ppu->bgXsc[0] == 0x41u;
+  const bool field_shadow =
+      field_play && smrpg_prepare_field_shadow();
+  PpuSetExtraSpaceCentered(g_ppu, (uint8_t)g_ws_extra);
+  if (field_shadow) {
+    int extra_left;
+    int extra_right;
+    smrpg_field_side_space(&extra_left, &extra_right);
+    PpuSetExtraSideSpace(g_ppu, extra_left, extra_right, 0);
+  }
   PpuSetWidescreenLayerClamp(g_ppu, 1u << 2);
+  if (field_shadow) {
+    /*
+     * The hardware-authentic inverted W1 admits only 8..247. Extend that
+     * game-authored field window into the host side margins for BG1, BG2,
+     * OBJ, and color composition. This changes no emulated PPU register.
+     */
+    PpuSetWidescreenWindowExpansion(
+        g_ppu, (1u << 0) | (1u << 1) | (1u << 4) | (1u << 5), 1u);
+  } else {
+    PpuSetWidescreenWindowExpansion(g_ppu, 0, 0);
+  }
   {
     /*
      * SMRPG has not yet rewritten its CPU-side OAM staging into the new
@@ -252,14 +718,20 @@ static void configure_widescreen_policy(void) {
   }
 
   /*
-   * In active field/battle presentation states, BG3 owns the edge HUD groups.
-   * Anchor its outer chunks in the top and bottom bands so party status,
-   * command prompts, and right-side labels follow the adaptive viewport while
-   * the center remains at authentic coordinates.
+   * TCP OAM snapshots identify battle slots 0..3 as the command diamond and
+   * slots 4..7 as Mario's portrait/HP. Battle actors begin at slot 8. Anchor
+   * exactly those eight HUD slots to the adaptive edge; the arena and every
+   * actor stay in authentic world coordinates.
    */
-  if (active_play && s_widescreen_hud) {
-    PpuSetWidescreenLayerAnchorBandSlot(g_ppu, 0, 2, 0, 72, 112, 160);
-    PpuSetWidescreenLayerAnchorBandSlot(g_ppu, 1, 2, 152, 224, 112, 160);
+  if (battle_play && s_widescreen_hud) {
+    PpuSetWidescreenLayerAnchorBand(g_ppu, 1, 0, 40, 144, 192);
+    PpuSetWsHudOamBand(g_ppu, 224, 112, 160);
+    PpuSetWsHudOamShiftRange(g_ppu, 0, 8);
+    PpuSetWidescreenHudAlwaysVisible(g_ppu, true);
+  } else {
+    PpuSetWsHudOamBand(g_ppu, 0, 0, 0);
+    PpuSetWsHudOamShiftRange(g_ppu, 0, 0);
+    PpuSetWidescreenHudAlwaysVisible(g_ppu, false);
   }
 }
 
@@ -268,6 +740,8 @@ void SmrpgDrawPpuFrame(void) {
   bool active[8] = {false};
 
   configure_widescreen_policy();
+  WsShadowFrame(g_ppu);
+  smrpg_fill_field_shadow();
   dma_startDma(g_dma, s_frame_hdmaen, true);
   for (int channel = 0; channel < 8; channel++) {
     SimpleHdma_Init(&channels[channel], &g_dma->channel[channel]);
@@ -289,6 +763,8 @@ static void session_reset(void) {
   s_last_lle_result = 1;
   s_frame_hdmaen = 0;
   s_loaded_runtime_state = false;
+  memset(&s_field_map, 0, sizeof(s_field_map));
+  WsShadowReset();
   interp_bridge_set_master_deadline(0);
 }
 
