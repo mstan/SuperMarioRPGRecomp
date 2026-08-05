@@ -500,6 +500,9 @@ int main(int argc, char **argv) {
 
   SDL_AudioSpec wanted = {0};
   wanted.freq = 32040;
+  /* Native rate, so the conversion is a no-op — but state it rather than
+   * leaning on the consumer's default. */
+  RtlSetAudioOutputRate(32040);
   wanted.format = AUDIO_S16SYS;
   wanted.channels = 2;
   SDL_AudioDeviceID audio = 0;
