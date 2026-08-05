@@ -14,7 +14,7 @@
 #include "types.h"
 #include "widescreen.h"
 
-#include <SDL.h>
+#include "desktop/sdl_compat.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -36,6 +36,14 @@ static const uint8_t kSmrpgSha256[32] = {
 static const char *const kSmrpgSha1[] = {
     "a4f7539054c359fe3f360b0e6b72e394439fe9df",
 };
+
+/* Baked in by -DSNESRECOMP_BUILD_VERSION=<ver> (see CMakeLists.txt); local
+ * builds report "dev". tools/make_release.ps1 verifies the stamp by scanning
+ * the packaged binary for this literal, so it must reach .rodata. */
+#ifndef SNESRECOMP_BUILD_VERSION
+#define SNESRECOMP_BUILD_VERSION "dev"
+#endif
+static const char kBuildVersion[] = SNESRECOMP_BUILD_VERSION;
 
 bool g_new_ppu = true;
 static SDL_mutex *g_audio_mutex;
@@ -70,25 +78,9 @@ void RtlApuUnlock(void) {
   if (g_audio_mutex) SDL_UnlockMutex(g_audio_mutex);
 }
 
-void host_report_init(const char *game_name, const char *build_version) {
-  (void)game_name;
-  (void)build_version;
-}
-void host_report_breadcrumb(const char *format, ...) { (void)format; }
-void host_report_fatal(const char *message) {
-  if (message) fprintf(stderr, "fatal: %s\n", message);
-}
-int host_report_has_fatal(void) { return 0; }
-void host_report_dump_json(FILE *stream) { (void)stream; }
-const char *host_report_write_minidump(void *info) {
-  (void)info;
-  return NULL;
-}
-const char *host_report_preserve_crash_copy(const char *path) {
-  (void)path;
-  return NULL;
-}
-void host_report_crash_test_tick(void) {}
+/* host_report_* now comes from the engine's runner/src/host_report.c (see
+ * CMakeLists.txt) rather than local no-op stubs, so SMRPG gets the same
+ * breadcrumb ring, minidump capture and version stamping as the other games. */
 
 static uint8_t *read_rom(const char *path, size_t *size_out) {
   FILE *stream = fopen(path, "rb");
@@ -201,7 +193,8 @@ static int resolve_rom(int argc, char **argv, char *path, size_t path_size,
 }
 
 static uint32_t keyboard_input(void) {
-  const Uint8 *keys = SDL_GetKeyboardState(NULL);
+  /* SDL3 returns const bool*, SDL2 const Uint8*; the shim normalizes both. */
+  const uint8_t *keys = snesrecomp_sdl_get_keyboard_state();
   uint32_t input = 0;
   if (keys[SDL_SCANCODE_Z]) input |= 0x0001u;
   if (keys[SDL_SCANCODE_A]) input |= 0x0002u;
@@ -255,14 +248,45 @@ static uint32_t controller_input(SDL_GameController *pad) {
   return input;
 }
 
-static void SDLCALL audio_callback(void *userdata, Uint8 *stream, int len) {
-  (void)userdata;
+static void fill_audio(Uint8 *stream, int len) {
   if (!g_snes || len < 4) {
     SDL_memset(stream, 0, (size_t)len);
     return;
   }
   RtlRenderAudio((int16_t *)stream, len / 4, 2);
 }
+
+#if SNESRECOMP_SDL3
+/* SDL3 replaced the pull callback with an SDL_AudioStream the app pushes into.
+ * The stream sizes each pull itself, so render into a scratch buffer grown on
+ * demand and hand the whole block over. */
+static SDL_AudioStream *g_audio_stream;
+static Uint8 *g_audio_scratch;
+static size_t g_audio_scratch_size;
+
+static void SDLCALL audio_stream_callback(void *userdata,
+                                          SDL_AudioStream *stream,
+                                          int additional_amount,
+                                          int total_amount) {
+  (void)userdata;
+  (void)total_amount;
+  if (additional_amount <= 0) return;
+  if ((size_t)additional_amount > g_audio_scratch_size) {
+    Uint8 *resized = (Uint8 *)realloc(g_audio_scratch,
+                                      (size_t)additional_amount);
+    if (!resized) return;
+    g_audio_scratch = resized;
+    g_audio_scratch_size = (size_t)additional_amount;
+  }
+  fill_audio(g_audio_scratch, additional_amount);
+  SDL_PutAudioStreamData(stream, g_audio_scratch, additional_amount);
+}
+#else
+static void SDLCALL audio_callback(void *userdata, Uint8 *stream, int len) {
+  (void)userdata;
+  fill_audio(stream, len);
+}
+#endif
 
 static void pace_frame(double *next_counter, double frame_counters) {
   *next_counter += frame_counters;
@@ -311,17 +335,20 @@ static int write_frame_bmp(const char *path, const uint8_t *pixels,
   return ok;
 }
 
+/* Uint64 deadlines: SDL3's SDL_GetTicks returns Uint64 and SDL_TICKS_PASSED is
+ * gone, so compare absolute deadlines directly. Widening is harmless under
+ * SDL2, where SDL_GetTicks returns Uint32. */
 static void set_state_feedback(SDL_Window *window, const char *operation,
-                               int slot, int ok, Uint32 *until) {
+                               int slot, int ok, Uint64 *until) {
   char title[192];
   snprintf(title, sizeof(title), "%s - State %s %s (slot %d)",
            kWindowTitle, operation, ok ? "succeeded" : "failed", slot + 1);
   SDL_SetWindowTitle(window, title);
-  *until = SDL_GetTicks() + 2500u;
+  *until = (Uint64)SDL_GetTicks() + 2500u;
 }
 
 static void perform_state_action(SDL_Window *window, int save,
-                                 int slot, Uint32 *feedback_until) {
+                                 int slot, Uint64 *feedback_until) {
   char path[128];
   if (save) RtlEnsureSaveDir();
   RtlSaveSlotPath(slot, path, sizeof(path));
@@ -330,8 +357,8 @@ static void perform_state_action(SDL_Window *window, int save,
                      feedback_until);
 }
 
-static void update_state_feedback(SDL_Window *window, Uint32 *feedback_until) {
-  if (*feedback_until && SDL_TICKS_PASSED(SDL_GetTicks(), *feedback_until)) {
+static void update_state_feedback(SDL_Window *window, Uint64 *feedback_until) {
+  if (*feedback_until && (Uint64)SDL_GetTicks() >= *feedback_until) {
     SDL_SetWindowTitle(window, kWindowTitle);
     *feedback_until = 0;
   }
@@ -353,7 +380,10 @@ static int update_adaptive_widescreen(SDL_Renderer *renderer,
   if (adaptive_view) {
     int width = 0;
     int height = 0;
-    SDL_GetRendererOutputSize(renderer, &width, &height);
+    /* Must be the TRUE physical output size; the shim routes SDL3 to
+     * SDL_GetRenderOutputSize, not the logical-presentation-adjusted
+     * "Current" variant that silently pinned Zelda to 4:3. */
+    snesrecomp_sdl_get_render_output_size(renderer, &width, &height);
     extra = adaptive_extra_for_size(width, height);
   }
   if (extra != g_ws_extra) {
@@ -365,6 +395,7 @@ static int update_adaptive_widescreen(SDL_Renderer *renderer,
 
 int main(int argc, char **argv) {
   SDL_SetMainReady();
+  host_report_init(kWindowTitle, kBuildVersion);
   char rom_path[1024] = {0};
   RecompLauncherCSettings launcher_settings;
   int resolve_result =
@@ -379,13 +410,14 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
+  /* SDL_Init flipped to true-on-success in SDL3 and inverts silently in its
+   * old `!= 0` form, so it must route through the shim. */
+  if (!snesrecomp_sdl_init(SDL_INIT_VIDEO | SDL_INIT_AUDIO |
+                           SDL_INIT_GAMECONTROLLER)) {
     fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
     free(rom);
     return 3;
   }
-  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,
-              launcher_settings.linear_filter ? "linear" : "nearest");
   g_audio_mutex = SDL_CreateMutex();
   if (!g_audio_mutex) Die("Unable to create the audio mutex");
 
@@ -401,29 +433,43 @@ int main(int argc, char **argv) {
       long parsed = strtol(port_value, NULL, 0);
       if (parsed > 0 && parsed <= 65535) debug_port = (int)parsed;
     }
-    if (debug_server_init(debug_port) == 0)
+    if (debug_server_init(debug_port) == 0) {
+#if SNESRECOMP_TRACE
       fprintf(stderr, "[smrpg] Debug server ready on port %d\n", debug_port);
+#endif
+    }
   }
   RtlReadSram();
 
-  SDL_Window *window =
-      SDL_CreateWindow(kWindowTitle,
-                       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                       launcher_settings.adaptive_view ? 960 : 768,
-                       launcher_settings.adaptive_view ? 540 : 576,
-                       SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+  /* SDL_WINDOW_ALLOW_HIGHDPI is one of the few old names SDL3 does NOT alias
+   * in SDL_oldnames.h; it became SDL_WINDOW_HIGH_PIXEL_DENSITY. */
+#if SNESRECOMP_SDL3
+  const SDL_WindowFlags kHighDpiFlag = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#else
+  const Uint32 kHighDpiFlag = SDL_WINDOW_ALLOW_HIGHDPI;
+#endif
+  SDL_Window *window = snesrecomp_sdl_create_window(
+      kWindowTitle,
+      launcher_settings.adaptive_view ? 960 : 768,
+      launcher_settings.adaptive_view ? 540 : 576,
+      SDL_WINDOW_RESIZABLE | kHighDpiFlag);
   if (!window) Die("Unable to create the game window");
   if (launcher_settings.fullscreen)
-    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-  SDL_Renderer *renderer =
-      SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-  if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    snesrecomp_sdl_set_fullscreen(window, true);
+  SDL_Renderer *renderer = snesrecomp_sdl_create_renderer(window, false, false);
+  if (!renderer) renderer = snesrecomp_sdl_create_renderer(window, true, false);
   if (!renderer) Die("Unable to create the game renderer");
   SDL_Texture *texture =
       SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
                         SDL_TEXTUREACCESS_STREAMING,
                         kPpuBufWidth, kFrameHeight);
   if (!texture) Die("Unable to create the game texture");
+  /* Scale quality is per-texture in SDL3 (the SDL2 render hint is gone), and
+   * the SNES framebuffer leaves alpha zero, so it must be marked opaque or
+   * SDL3 blends the whole frame away and presents only the clear color. */
+  snesrecomp_sdl_set_texture_linear(texture,
+                                    launcher_settings.linear_filter != 0);
+  snesrecomp_sdl_set_texture_opaque(texture);
 
   static uint8_t pixels[kPpuBufWidth * kFrameHeight * kBytesPerPixel];
   SmrpgSetWidescreenExtra(0);
@@ -431,28 +477,50 @@ int main(int argc, char **argv) {
   SmrpgBeginDrawing(pixels, kFrameWidth * kBytesPerPixel);
 
   SDL_AudioSpec wanted = {0};
-  SDL_AudioSpec obtained = {0};
   wanted.freq = 32040;
   wanted.format = AUDIO_S16SYS;
   wanted.channels = 2;
+  SDL_AudioDeviceID audio = 0;
+#if SNESRECOMP_SDL3
+  /* SDL_AudioSpec has no `samples`/`callback` in SDL3: the device is opened as
+   * a stream and the callback is supplied separately. */
+  g_audio_stream = SDL_OpenAudioDeviceStream(
+      SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &wanted, audio_stream_callback, NULL);
+  if (g_audio_stream) audio = SDL_GetAudioStreamDevice(g_audio_stream);
+#else
+  SDL_AudioSpec obtained = {0};
   wanted.samples = 1024;
   wanted.callback = audio_callback;
-  SDL_AudioDeviceID audio =
-      SDL_OpenAudioDevice(NULL, 0, &wanted, &obtained, 0);
+  audio = SDL_OpenAudioDevice(NULL, 0, &wanted, &obtained, 0);
+#endif
   if (!audio) Die("Unable to open the audio device");
-  SDL_PauseAudioDevice(audio, launcher_settings.enable_audio ? 0 : 1);
+  snesrecomp_sdl_pause_audio_device(audio, launcher_settings.enable_audio == 0);
 
   SDL_GameController *pad = NULL;
+#if SNESRECOMP_SDL3
+  {
+    /* SDL3 enumerates by instance ID rather than by index. */
+    int njs = 0;
+    SDL_JoystickID *joysticks = SDL_GetJoysticks(&njs);
+    for (int i = 0; i < njs; i++) {
+      if (!SDL_IsGamepad(joysticks[i])) continue;
+      pad = SDL_OpenGamepad(joysticks[i]);
+      if (pad) break;
+    }
+    SDL_free(joysticks);
+  }
+#else
   for (int i = 0; i < SDL_NumJoysticks(); i++) {
     if (SDL_IsGameController(i)) {
       pad = SDL_GameControllerOpen(i);
       if (pad) break;
     }
   }
+#endif
 
   int running = 1;
   int paused = 0;
-  Uint32 state_feedback_until = 0;
+  Uint64 state_feedback_until = 0;
   long frames = 0;
   long auto_close_frames = 0;
   const char *auto_close = getenv("SNESRECOMP_AUTOCLOSE_FRAMES");
@@ -466,29 +534,30 @@ int main(int argc, char **argv) {
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT) running = 0;
       if (event.type == SDL_KEYDOWN && !event.key.repeat) {
-        if (event.key.keysym.sym >= SDLK_F1 &&
-            event.key.keysym.sym <= SDLK_F12) {
-          int slot = (int)(event.key.keysym.sym - SDLK_F1);
-          perform_state_action(
-              window, (event.key.keysym.mod & KMOD_SHIFT) != 0, slot,
-              &state_feedback_until);
+        /* The keysym struct was flattened in SDL3; the shim macros pick the
+         * right member for each major. */
+        const SDL_Keycode key = SNESRECOMP_SDL_EVENT_KEY(event);
+        const Uint16 mod = (Uint16)SNESRECOMP_SDL_EVENT_MOD(event);
+        if (key >= SDLK_F1 && key <= SDLK_F12) {
+          int slot = (int)(key - SDLK_F1);
+          perform_state_action(window, (mod & KMOD_SHIFT) != 0, slot,
+                               &state_feedback_until);
           continue;
         }
-        switch (event.key.keysym.sym) {
+        switch (key) {
           case SDLK_ESCAPE:
             running = 0;
             break;
           case SDLK_p:
             paused = !paused;
-            SDL_PauseAudioDevice(audio, paused);
+            snesrecomp_sdl_pause_audio_device(audio, paused != 0);
             break;
           case SDLK_RETURN: {
-            if (!(event.key.keysym.mod & KMOD_ALT)) break;
-            Uint32 flags = SDL_GetWindowFlags(window);
-            SDL_SetWindowFullscreen(
-                window, (flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
-                            ? 0
-                            : SDL_WINDOW_FULLSCREEN_DESKTOP);
+            if (!(mod & KMOD_ALT)) break;
+            Uint32 flags = (Uint32)SDL_GetWindowFlags(window);
+            snesrecomp_sdl_set_fullscreen(
+                window,
+                (flags & SNESRECOMP_SDL_WINDOW_FULLSCREEN_DESKTOP) == 0);
             break;
           }
           default:
@@ -527,7 +596,7 @@ int main(int argc, char **argv) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_Rect source = {0, 0, logical_width, kFrameHeight};
-    SDL_RenderCopy(renderer, texture, &source, NULL);
+    snesrecomp_sdl_render_texture(renderer, texture, &source, NULL);
     SDL_RenderPresent(renderer);
     pace_frame(&next_frame_counter, frame_counters);
     if (auto_close_frames > 0 && frames >= auto_close_frames) running = 0;
@@ -538,8 +607,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Unable to write frame dump: %s\n", frame_dump);
   RtlWriteSram();
   debug_server_shutdown();
-  SDL_PauseAudioDevice(audio, 1);
+  snesrecomp_sdl_pause_audio_device(audio, true);
+#if SNESRECOMP_SDL3
+  /* Destroying the stream closes the device it was opened against. */
+  SDL_DestroyAudioStream(g_audio_stream);
+  g_audio_stream = NULL;
+  free(g_audio_scratch);
+  g_audio_scratch = NULL;
+  g_audio_scratch_size = 0;
+#else
   SDL_CloseAudioDevice(audio);
+#endif
   if (pad) SDL_GameControllerClose(pad);
   SDL_DestroyTexture(texture);
   SDL_DestroyRenderer(renderer);

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
-SNESRECOMP_ROOT="${SNESRECOMP_ROOT:-../_wt_smrpg_sa1_snesrecomp}"
+SNESRECOMP_ROOT="${SNESRECOMP_ROOT:-./snesrecomp}"
 EXPECTED_SHA256="740646f3535bfb365ca44e70d46ab433467b142bd84010393070bd0b141af853"
 
 if [ -z "$PYTHON" ] || [ ! -f "$SNESRECOMP_ROOT/tools/v2_emit.py" ]; then

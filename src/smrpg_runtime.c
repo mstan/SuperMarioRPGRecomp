@@ -256,6 +256,10 @@ static bool smrpg_find_field_map(void) {
   s_field_map.physical_y = (uint8_t)physical_y;
   s_field_map.exact_score = best_exact;
   s_field_map.signal_score = best_signal;
+#if SNESRECOMP_TRACE
+  /* Per-frame bring-up diagnostic: trace builds only. A Release build emitted
+   * one of these for every widescreen field-map solve, which is one line per
+   * frame on stderr for the whole session. */
   if (s_field_map.valid) {
     fprintf(stderr,
             "[smrpg-ws] area=%d quadrant=(%u,%u)->(%u,%u) "
@@ -264,6 +268,7 @@ static bool smrpg_find_field_map(void) {
             s_field_map.source_x, s_field_map.source_y,
             best_x, best_y, best_exact, best_signal);
   }
+#endif
   return s_field_map.valid;
 }
 
@@ -628,6 +633,8 @@ static void run_one_frame(void) {
   s_next_frame_master += kMasterClocksPerFrame;
   s_host_frames++;
 
+#if SNESRECOMP_TRACE
+  /* Boot/heartbeat progress trace: trace builds only. */
   if (s_host_frames <= 16 || (s_host_frames % 600u) == 0) {
     Sa1 *sa1 = g_snes->cart->sa1;
     fprintf(stderr,
@@ -638,6 +645,10 @@ static void run_one_frame(void) {
             (unsigned long long)(sa1 ? sa1_instructions_executed(sa1) : 0),
             slices, interrupts);
   }
+#else
+  (void)slices;
+  (void)interrupts;
+#endif
 }
 
 void SmrpgBeginDrawing(uint8_t *pixels, size_t pitch) {

@@ -11,3 +11,6 @@ smrpg.sfc
 captures/
 /tier2_coverage.json
 snesref_trace.jsonl
+# Release artifacts produced by tools/make_release.ps1 and tools/build-linux.sh
+/release-stage/
+/release-linux/
