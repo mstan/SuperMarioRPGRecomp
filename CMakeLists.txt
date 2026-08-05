@@ -30,14 +30,12 @@ if(NOT SMRPG_GEN_SOURCES)
         "`bash tools/regen.sh`.")
 endif()
 
-# host_report.c stays in: it owns the always-on breadcrumb ring, the crash
-# minidump writer and the build-version stamp that every other SNES recomp
-# ships. SMRPG previously replaced it with do-nothing stubs in sdl_main.c,
-# which meant no crash reports at all - and, because the stub was inlined at
-# -O3, the version string was dropped from the binary entirely.
 list(REMOVE_ITEM SNESRECOMP_RUNNER_SOURCES
-    "${SNESRECOMP_ROOT}/runner/src/keybinds.c")
+    "${SNESRECOMP_ROOT}/runner/src/keybinds.c"
+    "${SNESRECOMP_ROOT}/runner/src/host_report.c")
 
+# The headless host keeps its own host_report stubs: it links no SDL, and
+# host_report.c includes desktop/sdl_compat.h.
 add_executable(SuperMarioRPGSNESRecompHeadless
     ${SNESRECOMP_RUNNER_SOURCES}
     ${SMRPG_GEN_SOURCES}
@@ -45,8 +43,14 @@ add_executable(SuperMarioRPGSNESRecompHeadless
     src/headless_main.c
     src/smrpg_runtime.c)
 
+# The desktop host takes the REAL host_report.c: it owns the always-on
+# breadcrumb ring, the crash minidump writer and the build-version stamp that
+# every other SNES recomp ships. SMRPG previously replaced it with do-nothing
+# stubs in sdl_main.c, which meant no crash reports at all - and, because the
+# stub was inlined at -O3, the version string was dropped from the binary.
 add_executable(SuperMarioRPGSNESRecomp
     ${SNESRECOMP_RUNNER_SOURCES}
+    "${SNESRECOMP_ROOT}/runner/src/host_report.c"
     ${SMRPG_GEN_SOURCES}
     src/sdl_main.c
     src/smrpg_runtime.c)
