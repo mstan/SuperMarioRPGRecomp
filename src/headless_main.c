@@ -1,5 +1,6 @@
 #include "smrpg_runtime.h"
 
+#include "audio_trace.h"
 #include "common_rtl.h"
 #include "cpu_state.h"
 #include "sha256.h"
@@ -30,6 +31,7 @@ typedef struct AttractStats {
   uint64_t video_active_frames;
   uint64_t audio_active_frames;
   uint32_t audio_peak;
+  uint64_t audio_underruns;
 } AttractStats;
 
 typedef struct WavWriter {
@@ -439,6 +441,15 @@ int main(int argc, char **argv) {
   uint64_t sa1_instructions =
       sa1 ? sa1_instructions_executed(sa1) : 0;
   uint32_t audio_samples = g_snes->apu->dsp->sampleWrite;
+  /* Authoritative underrun count. This soak previously tracked no shortfall
+   * accounting at all here; rtl_render_native (common_rtl.c) already counts
+   * every real delivery shortfall against its true threshold (frames * ratio
+   * + 2 native samples, not a naive `available < audio_frames`) via
+   * audio_trace_on_output_underflow, so read that counter directly rather
+   * than recompute the threshold in this host. */
+  AudioTraceStats audio_stats;
+  audio_trace_get_stats(&audio_stats);
+  stats.audio_underruns = audio_stats.output_underflows;
   int qualified =
       frame_limit < 600 ||
       (sa1_instructions > 0 &&
@@ -446,13 +457,14 @@ int main(int argc, char **argv) {
        stats.video_active_frames >= (uint64_t)(frame_limit / 4) &&
        stats.video_changes >= (uint64_t)(frame_limit / 600) &&
        stats.audio_active_frames >= (uint64_t)(frame_limit / 10) &&
-       stats.audio_peak > 0 && audio_samples > 0);
+       stats.audio_peak > 0 && audio_samples > 0 &&
+       stats.audio_underruns == 0);
 
   fprintf(stderr,
           "smrpg_native: %s frames=%ld resume=%06x master=%llu "
           "sa1_instructions=%llu logic_changes=%llu "
           "video_active=%llu video_changes=%llu audio_samples=%u "
-          "audio_active=%llu audio_peak=%u\n",
+          "audio_active=%llu audio_peak=%u audio_underruns=%llu\n",
           qualified && output_ok ? "PASS" : "FAIL", frame_limit,
           (unsigned)SmrpgResumePc(),
           (unsigned long long)g_cpu.master_cycles,
@@ -460,7 +472,8 @@ int main(int argc, char **argv) {
           (unsigned long long)stats.logic_changes,
           (unsigned long long)stats.video_active_frames,
           (unsigned long long)stats.video_changes, audio_samples,
-          (unsigned long long)stats.audio_active_frames, stats.audio_peak);
+          (unsigned long long)stats.audio_active_frames, stats.audio_peak,
+          (unsigned long long)stats.audio_underruns);
   free(rom);
   return qualified && output_ok ? 0 : 8;
 }
