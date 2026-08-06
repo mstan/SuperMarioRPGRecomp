@@ -4,6 +4,7 @@
 #include "cpu_trace.h"
 #include "debug_server.h"
 #include "host_report.h"
+#include "keybinds.h"
 #include "launcher_profile.h"
 #include "recomp_launcher.h"
 #include "sha256.h"
@@ -195,19 +196,42 @@ static int resolve_rom(int argc, char **argv, char *path, size_t path_size,
 static uint32_t keyboard_input(void) {
   /* SDL3 returns const bool*, SDL2 const Uint8*; the shim normalizes both. */
   const uint8_t *keys = snesrecomp_sdl_get_keyboard_state();
+  /* Previously this checked a scancode table hardcoded here, so the
+   * launcher's Controls page (recomp-ui's recompui_keybinds_* -- a
+   * separately-prefixed copy of the same generic module) could edit and
+   * save keybinds.ini, but the game never read it back: a rebind in the
+   * launcher had no effect in-game. keybinds_read_player() is this engine's
+   * shared keybinds.ini reader (see runner/src/keybinds.h/.c, now linked
+   * into this target -- CMakeLists.txt), so route through it instead.
+   *
+   * keybinds_read_player()'s bitmask uses the layout documented in
+   * keybinds.h: bit0=R,1=L,2=X,3=A,4=Right,5=Left,6=Down,7=Up,8=Start,
+   * 9=Select,10=Y,11=B. This host's own `input` word (see the bit constants
+   * below and controller_input(), which OR's into the same word) instead
+   * packs B=bit0,Y=bit1,Select=bit2,Start=bit3,Up=bit4,Down=bit5,Left=bit6,
+   * Right=bit7,A=bit8,X=bit9,L=bit10,R=bit11 -- a different, pre-existing
+   * convention this host already used. kKbBitForInputBit[i] names, for each
+   * input bit i, which keybinds bit carries that same SNES button, so the
+   * remap reads by button identity rather than leaning on the fact that it
+   * happens to be a straight bit-reversal. */
+  static const uint8_t kKbBitForInputBit[12] = {
+      11, /* input bit0  B      <- keybinds bit11 B      */
+      10, /* input bit1  Y      <- keybinds bit10 Y      */
+      9,  /* input bit2  Select <- keybinds bit9  Select */
+      8,  /* input bit3  Start  <- keybinds bit8  Start  */
+      7,  /* input bit4  Up     <- keybinds bit7  Up     */
+      6,  /* input bit5  Down   <- keybinds bit6  Down   */
+      5,  /* input bit6  Left   <- keybinds bit5  Left   */
+      4,  /* input bit7  Right  <- keybinds bit4  Right  */
+      3,  /* input bit8  A      <- keybinds bit3  A      */
+      2,  /* input bit9  X      <- keybinds bit2  X      */
+      1,  /* input bit10 L      <- keybinds bit1  L      */
+      0,  /* input bit11 R      <- keybinds bit0  R      */
+  };
+  uint16_t kb = keybinds_read_player(keys, 1);  /* SMRPG is single-player */
   uint32_t input = 0;
-  if (keys[SDL_SCANCODE_Z]) input |= 0x0001u;
-  if (keys[SDL_SCANCODE_A]) input |= 0x0002u;
-  if (keys[SDL_SCANCODE_RSHIFT]) input |= 0x0004u;
-  if (keys[SDL_SCANCODE_RETURN]) input |= 0x0008u;
-  if (keys[SDL_SCANCODE_UP]) input |= 0x0010u;
-  if (keys[SDL_SCANCODE_DOWN]) input |= 0x0020u;
-  if (keys[SDL_SCANCODE_LEFT]) input |= 0x0040u;
-  if (keys[SDL_SCANCODE_RIGHT]) input |= 0x0080u;
-  if (keys[SDL_SCANCODE_X]) input |= 0x0100u;
-  if (keys[SDL_SCANCODE_S]) input |= 0x0200u;
-  if (keys[SDL_SCANCODE_Q]) input |= 0x0400u;
-  if (keys[SDL_SCANCODE_W]) input |= 0x0800u;
+  for (int i = 0; i < 12; i++)
+    if ((kb >> kKbBitForInputBit[i]) & 1) input |= (1u << i);
   return input;
 }
 
@@ -442,6 +466,12 @@ int main(int argc, char **argv) {
   }
   g_audio_mutex = SDL_CreateMutex();
   if (!g_audio_mutex) Die("Unable to create the audio mutex");
+
+  /* Load (or generate) keybinds.ini next to the executable (cwd is
+   * exe-anchored; see config-exe-anchoring convention shared by every
+   * SNES recomp in this family). Must precede the first keyboard_input()
+   * call in the main loop below. */
+  keybinds_init(NULL);
 
   RtlRegisterGame(SmrpgGameInfo());
   if (!SnesInit(rom, (int)rom_size) || !cart_has_sa1(g_snes->cart))

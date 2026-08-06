@@ -48,9 +48,18 @@ add_executable(SuperMarioRPGSNESRecompHeadless
 # every other SNES recomp ships. SMRPG previously replaced it with do-nothing
 # stubs in sdl_main.c, which meant no crash reports at all - and, because the
 # stub was inlined at -O3, the version string was dropped from the binary.
+#
+# It also takes the REAL keybinds.c, for the same reason: the headless host
+# links no SDL, so it can't carry a keyboard-scancode module, but the desktop
+# host does link SDL and previously had its OWN hardcoded scancode->button
+# table in sdl_main.c that ignored keybinds.ini entirely -- the launcher's
+# Controls page (recomp-ui, a separately-prefixed recompui_keybinds_* copy of
+# this same file) could edit and save that file, but the game never read it
+# back. See sdl_main.c's keyboard_input() for the fix.
 add_executable(SuperMarioRPGSNESRecomp
     ${SNESRECOMP_RUNNER_SOURCES}
     "${SNESRECOMP_ROOT}/runner/src/host_report.c"
+    "${SNESRECOMP_ROOT}/runner/src/keybinds.c"
     ${SMRPG_GEN_SOURCES}
     src/sdl_main.c
     src/smrpg_runtime.c)

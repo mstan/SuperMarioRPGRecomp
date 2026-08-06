@@ -63,8 +63,11 @@ subsequent launches skip the picker.
 
 ## Controls
 
-The desktop host's default keyboard bindings are currently **fixed in code**
-for this release:
+Keyboard bindings are read from `keybinds.ini` next to the executable (the
+same shared, INI-driven keybinds module every other recomp in this family
+uses), and can be edited and saved from the pre-game launcher's Controls
+page — a rebind made there takes effect the next time the game runs. A file
+is generated with these defaults on first run if none exists:
 
 | SNES button | Default key |
 |-------------|-------------|
@@ -73,19 +76,17 @@ for this release:
 | A           | X |
 | Y           | A |
 | X           | S |
-| L           | Q |
-| R           | W |
+| L           | C |
+| R           | V |
 | Start       | Enter |
 | Select      | Right Shift |
 
 A single connected Xbox / PlayStation / Switch Pro controller is
 auto-detected via SDL_GameController. Plug it in before launching, or
-hot-plug after.
+hot-plug after — gamepad button assignments are fixed in code (not driven by
+`keybinds.ini`, which covers keyboard only), matching the rest of the family.
 
-**Known limitation:** the pre-game launcher's Controls page can edit and
-save `keybinds.ini`, but the desktop host does not read that file back in
-this release — the bindings above apply regardless of what's saved there.
-Unlike the other SNES recomps in this family, Super Mario RPG also has no
+Unlike the other SNES recomps in this family, Super Mario RPG has no
 `config.ini`: it's a from-scratch scaffold whose presentation defaults live
 in the launcher's own settings, not a game-owned config file.
 

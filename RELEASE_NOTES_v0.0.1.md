@@ -49,10 +49,10 @@ video output specifically.
   presentation defaults live in the launcher's own settings rather than a
   game-side config file. The one state file this release genuinely owns is
   `rom.cfg` (the cached ROM path).
-- **Keyboard bindings are fixed for this release.** The pre-game launcher's
-  Controls page can edit and save `keybinds.ini`, but the desktop host does
-  not read that file back yet — the default keyboard mapping documented in
-  the README applies regardless of what's saved there.
+- **Gamepad bindings are fixed in code.** The pre-game launcher's Controls
+  page and `keybinds.ini` cover keyboard bindings only (matching the rest of
+  this family); a connected controller always uses the fixed SDL_GameController
+  mapping documented in the README.
 - Static recompilation coverage is small at this stage (2 qualified AOT
   variants); nearly everything still executes through the correctness-floor
   interpreter. This is expected for a bring-up-stage title and is tracked
