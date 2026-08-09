@@ -27,15 +27,15 @@ snesrecomp's own runner implementations (`snesrecomp/runner/`).
 
 The ROM is **never** redistributed — you supply your own legally-dumped copy.
 
-## Current status: preview quality, first release (v0.0.1)
+## Current status: preview quality, coverage QA release (v0.0.2)
 
-This is the first public release of this recompilation. It boots, runs the
-attract loop, and holds up under an unattended headless soak (see
-[Qualification](#qualification)) — but **the video output has not yet been
-verified by a human playthrough.** Everything above the automated attract
-loop and headless soak metrics is unverified. Treat it as a preview, and see
-[RELEASE_NOTES_v0.0.1.md](RELEASE_NOTES_v0.0.1.md) for the full list of
-what's new and what's not yet confirmed.
+This preview boots, runs the attract loop, and holds up under an unattended
+headless soak (see [Qualification](#qualification)) — but **the video output
+has not yet been verified by a human playthrough.** v0.0.2 is the production
+playthrough/coverage release: it preserves the complete recompiler-actionable
+dispatch-miss set in unique per-run files, including after an abnormal exit.
+See [RELEASE_NOTES_v0.0.2.md](RELEASE_NOTES_v0.0.2.md) for the exact collection
+rules and the full list of changes and limitations.
 
 ## Required ROM
 
@@ -151,12 +151,12 @@ Install [MSYS2](https://www.msys2.org/) with the mingw64 toolchain (`cmake`,
 ```bash
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/SDL3/x86_64-w64-mingw32 \
-  "-DSNESRECOMP_BUILD_VERSION:STRING=0.0.1"
+  "-DSNESRECOMP_BUILD_VERSION:STRING=0.0.2"
 cmake --build build-release --target SuperMarioRPGSNESRecomp
 ```
 
 (Quote `SNESRECOMP_BUILD_VERSION` exactly like that — PowerShell rewrites an
-unquoted `-DSNESRECOMP_BUILD_VERSION=0.0.1` into `0`.) SDL3 is the default;
+unquoted `-DSNESRECOMP_BUILD_VERSION=0.0.2` into `0`.) SDL3 is the default;
 SDL2 remains a supported fallback via `-DSNESRECOMP_SDL_BACKEND=SDL2`. To
 package a zip the way releases are built, see `tools/make_release.ps1`
 (builds and stamps the version separately; the script only packages).
@@ -172,7 +172,7 @@ script configures, builds, and wraps the result into a self-contained
 x86_64 AppImage in one step:
 
 ```bash
-bash tools/build-linux.sh --regen --version 0.0.1
+bash tools/build-linux.sh --regen --version 0.0.2
 ```
 
 State (`rom.cfg`, `keybinds.ini`, `saves/`) lives next to the `.AppImage`,
@@ -316,7 +316,7 @@ have 0.989 correlation after accounting for the same approximately 100 ms
 startup phase offset; RMS levels agree within 0.6%.
 
 **All of the above is automated attract-loop / headless-soak measurement —
-none of it is a human playthrough.** See [Current status](#current-status-preview-quality-first-release-v001).
+none of it is a human playthrough.** See [Current status](#current-status-preview-quality-coverage-qa-release-v002).
 
 The current generation contains 2 qualified exact AOT variants (recorded in
 `recomp/tier2_coverage.json`'s `qualified_aot_targets`), with everything
