@@ -10,6 +10,10 @@ smrpg.sfc
 *.ppm
 captures/
 /tier2_coverage.json
+/tier2_*.json
+/tier2_*.jsonl
+__pycache__/
+*.pyc
 snesref_trace.jsonl
 # Release artifacts produced by tools/make_release.ps1 and tools/build-linux.sh
 /release-stage/

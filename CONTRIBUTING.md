@@ -90,7 +90,11 @@ meant to be committed: it's the coverage/qualification manifest that
 `tools/regen.sh` feeds back into the analyzer to promote interpreter
 discoveries to AOT roots. Update it with
 `python tools/merge_tier2_coverage.py recomp/tier2_coverage.json <captures...>`
-after a headless soak that observes new coverage, not by hand.
+after a headless soak or production playthrough that observes new coverage,
+not by hand. The merge tool accepts both unique clean-exit `.json` manifests
+and append-only crash-recovery `.jsonl` journals.
+Use one artifact per run: the final `.json` when present, otherwise its
+same-stem `.jsonl` journal.
 
 ## Before opening a pull request
 

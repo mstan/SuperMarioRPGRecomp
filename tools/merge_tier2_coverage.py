@@ -12,24 +12,70 @@ import tempfile
 
 
 SCHEMA = "snesrecomp tier2 coverage v1"
+DISCOVERY_SCHEMA = "snesrecomp tier2 discovery v1"
+
+
+def parse_capture(raw: str, spec: str) -> dict:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, dict) and data.get("schema") == SCHEMA:
+        return data
+
+    records = []
+    for line_number, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{spec}:{line_number}: torn/invalid JSONL: {exc}") from exc
+        if item.get("schema") != DISCOVERY_SCHEMA:
+            raise ValueError(
+                f"{spec}:{line_number}: unsupported schema {item.get('schema')!r}"
+            )
+        records.append(item)
+    if not records:
+        schema = data.get("schema") if isinstance(data, dict) else None
+        raise ValueError(f"{spec}: unsupported schema {schema!r}")
+
+    titles = {item.get("rom_title") for item in records}
+    if len(titles) != 1:
+        raise ValueError(f"{spec}: journal ROM titles differ: {sorted(titles)}")
+    discoveries = []
+    for item in records:
+        record = dict(item)
+        for metadata in ("schema", "capture_id", "rom_title"):
+            record.pop(metadata, None)
+        discoveries.append(record)
+    return {
+        "schema": SCHEMA,
+        "rom_title": titles.pop(),
+        "total_tier_hits": sum(
+            int(item.get("clean_hits", 0)) + int(item.get("bail_hits", 0))
+            for item in discoveries
+        ),
+        "distinct_sites": len(discoveries),
+        "overflowed_tuples": 0,
+        "journal_write_failures": 0,
+        "discoveries": discoveries,
+        "ram_routines_overflow": 0,
+        "ram_routines": [],
+    }
 
 
 def load(spec: str) -> dict:
     if spec.startswith("git:"):
-        data = json.loads(
-            subprocess.check_output(
-                ["git", "show", spec.removeprefix("git:")],
-                text=True,
-                encoding="utf-8",
-            )
+        raw = subprocess.check_output(
+            ["git", "show", spec.removeprefix("git:")],
+            text=True,
+            encoding="utf-8",
         )
     else:
         path = Path(spec)
-        with path.open("r", encoding="utf-8") as stream:
-            data = json.load(stream)
-    if data.get("schema") != SCHEMA:
-        raise ValueError(f"{spec}: unsupported schema {data.get('schema')!r}")
-    return data
+        raw = path.read_text(encoding="utf-8")
+    return parse_capture(raw, spec)
 
 
 def discovery_key(item: dict) -> tuple[str, str, str, str]:
@@ -70,6 +116,12 @@ def merge_counter_record(current: dict, incoming: dict) -> None:
         current["nondeterministic"] = True
     if not incoming.get("terminated", True):
         current["terminated"] = False
+    if "outcome_pending" in current or "outcome_pending" in incoming:
+        current["outcome_pending"] = bool(current.get("outcome_pending")) and bool(
+            incoming.get("outcome_pending")
+        )
+        if int(current.get("clean_hits", 0)) or int(current.get("bail_hits", 0)):
+            current["outcome_pending"] = False
 
 
 def merge_records(
@@ -94,7 +146,11 @@ def main() -> int:
     parser.add_argument(
         "inputs",
         nargs="+",
-        help="manifest path or git:<revision>:<path>",
+        help=(
+            "one artifact per run: prefer its final .json manifest, or use "
+            "its .jsonl journal when the manifest is missing; git:<rev>:<path> "
+            "is also accepted"
+        ),
     )
     parser.add_argument(
         "--unsafe-target",
@@ -129,6 +185,7 @@ def main() -> int:
     result["ram_routines"] = []
     result["total_tier_hits"] = 0
     result["overflowed_tuples"] = 0
+    result["journal_write_failures"] = 0
     result["ram_routines_overflow"] = 0
     unsafe_targets: set[int] = set()
     qualified_targets: set[int] = set()
@@ -143,6 +200,9 @@ def main() -> int:
         result["total_tier_hits"] += int(manifest.get("total_tier_hits", 0))
         result["overflowed_tuples"] += int(
             manifest.get("overflowed_tuples", 0)
+        )
+        result["journal_write_failures"] += int(
+            manifest.get("journal_write_failures", 0)
         )
         result["discoveries"] = merge_records(
             result["discoveries"],

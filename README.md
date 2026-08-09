@@ -112,6 +112,12 @@ a repro:
 - `last_run_report.json` — written at the end of **every** run (crash or
   clean exit), so grab it right after the bad run if there is no
   `crash_report_*` file.
+- `tier2_<game>_<UTC>_p<PID>.json` — the complete, merge-ready dispatch-miss
+  set for one cleanly ended run. Every run gets its own file.
+- The matching `.jsonl` file is an append-only recovery journal. Each distinct
+  recompiler-actionable miss is flushed before its missing target executes, so
+  keep this file too if the game is killed or crashes before writing the final
+  JSON manifest.
 
 None of these contain personal data beyond your Windows version, hardware
 model, and the folder path the game runs from.
@@ -246,7 +252,33 @@ failed attract-soak thresholds. Useful environment variables:
 | `SNESRECOMP_INPUT_SCRIPT` | Comma-separated `FIRST[-LAST]:MASK` spans for deterministic input (e.g. `900:0x8` taps Start). |
 | `SNESRECOMP_WIDESCREEN_EXTRA=71` | Force a 398-pixel adaptive framebuffer in headless captures. |
 | `SNESRECOMP_WIDESCREEN_HUD=0` | Compare the unanchored (centered) HUD policy. |
-| `SNESRECOMP_TIER2_MANIFEST` | Override the coverage-manifest output path (default `tier2_coverage.json`). |
+| `SNESRECOMP_TIER2_MANIFEST` | Override the final manifest path (default is a unique per-run `tier2_<game>_<UTC>_p<PID>.json`). |
+| `SNESRECOMP_TIER2_JOURNAL` | Override the append-only dispatch-miss journal path (default matches the per-run manifest with `.jsonl`). |
+
+### Production coverage playthrough
+
+Use a normal Production build and leave both Tier-2 path overrides unset. At
+the first sighting of each distinct `(site, target, M/X, kind)` gap, the game
+appends one complete line to the per-run `.jsonl` journal and flushes it. A
+normal quit also writes a unique merge-ready `.json` manifest with hit counts
+and RAM-routine evidence. Repeat launches create new files instead of replacing
+earlier sessions.
+
+Keep both file types from every session. When merging, supply **one artifact
+per session**: prefer that session's `.json`; use its same-stem `.jsonl` only
+when a crash or forced termination prevented the `.json` from being written.
+For example:
+
+```bash
+python tools/merge_tier2_coverage.py recomp/tier2_coverage.json \
+  tier2_super_mario_rpg_20260809T031617Z_p2776.json \
+  tier2_super_mario_rpg_20260810T021500Z_p4120.jsonl
+```
+
+The capture intentionally records the full **recompiler-actionable** miss set:
+interpreter tier-downs plus in-interpreter call/jump gaps. The diagnostic
+`g_dispatch_log` is not the coverage artifact; it includes normal compiled
+return-unwind lookups, is capped, and is disabled in Production builds.
 
 ## Qualification
 
@@ -291,8 +323,13 @@ The current generation contains 2 qualified exact AOT variants (recorded in
 else — including entries that were tried and failed a semantic soak
 (`unsafe_aot_targets`) — retaining the interpreter fallback. Merge separate
 attract and gameplay captures with
-`python tools/merge_tier2_coverage.py recomp/tier2_coverage.json <inputs...>`;
-the merged profile is checked in at `recomp/tier2_coverage.json` and
+`python tools/merge_tier2_coverage.py recomp/tier2_coverage.json <inputs...>`.
+`<inputs...>` may mix clean-exit `.json` manifests and crash-recovery `.jsonl`
+journals from different sessions. Do not pass both files from the same session,
+because the journal's first-hit evidence is already included in its final
+manifest. Keep every playthrough capture until the merged profile reports
+`overflowed_tuples: 0` and `journal_write_failures: 0`.
+The merged profile is checked in at `recomp/tier2_coverage.json` and
 `tools/regen.sh` passes it to the analyzer automatically.
 
 ## Public disassembly metadata
