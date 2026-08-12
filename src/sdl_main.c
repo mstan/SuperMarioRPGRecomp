@@ -4,23 +4,38 @@
 #include "cpu_trace.h"
 #include "debug_server.h"
 #include "host_report.h"
+#include "host_paths.h"
 #include "keybinds.h"
 #include "launcher_profile.h"
+#include "mod_runtime.h"
 #include "recomp_launcher.h"
 #include "sha256.h"
 #include "snes/cart.h"
+#include "snes/interp_bridge.h"
 #include "snes/ppu.h"
 #include "snes/snes.h"
+#include "snes/tier2_capture.h"
 #include "spc_player.h"
 #include "types.h"
 #include "widescreen.h"
 
 #include "desktop/sdl_compat.h"
+#include "mods/smrpg_coverage_plugin.h"
+#include "mods/smrpg_widescreen_plugin.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#if defined(_WIN32)
+#include <direct.h>
+#include <process.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 enum {
   kFrameWidth = 256,
@@ -34,6 +49,8 @@ static const uint8_t kSmrpgSha256[32] = {
     0x46, 0x7b, 0x14, 0x2b, 0xd8, 0x40, 0x10, 0x39,
     0x30, 0x70, 0xbd, 0x0b, 0x14, 0x1a, 0xf8, 0x53,
 };
+static const char kSmrpgSha256Hex[] =
+    "740646f3535bfb365ca44e70d46ab433467b142bd84010393070bd0b141af853";
 static const char *const kSmrpgSha1[] = {
     "a4f7539054c359fe3f360b0e6b72e394439fe9df",
 };
@@ -50,6 +67,10 @@ bool g_new_ppu = true;
 static SDL_mutex *g_audio_mutex;
 static const char kWindowTitle[] =
     "Super Mario RPG: Legend of the Seven Stars";
+static char g_coverage_bundle_dir[1024];
+static char g_coverage_manifest_path[1024];
+static char g_coverage_journal_path[1024];
+static int g_mods_ready;
 
 static void spc_initialize(SpcPlayer *player) { (void)player; }
 static void spc_upload(SpcPlayer *player, const uint8_t *data) {
@@ -82,6 +103,183 @@ void RtlApuUnlock(void) {
 /* host_report_* now comes from the engine's runner/src/host_report.c (see
  * CMakeLists.txt) rather than local no-op stubs, so SMRPG gets the same
  * breadcrumb ring, minidump capture and version stamping as the other games. */
+
+static int coverage_truthy(const char *value) {
+  if (!value || !value[0]) return 0;
+  return strcmp(value, "0") != 0 && strcmp(value, "false") != 0 &&
+         strcmp(value, "False") != 0 && strcmp(value, "FALSE") != 0 &&
+         strcmp(value, "off") != 0 && strcmp(value, "OFF") != 0 &&
+         strcmp(value, "no") != 0 && strcmp(value, "NO") != 0;
+}
+
+static const char *smrpg_mod_root(void) {
+  static char path[1024];
+  if (snesrecomp_exe_dir_path("mods", path, sizeof(path)))
+    return path;
+  return "mods/preloaded";
+}
+
+static int coverage_mkdir(const char *path) {
+#if defined(_WIN32)
+  if (_mkdir(path) == 0) return 1;
+#else
+  if (mkdir(path, 0755) == 0) return 1;
+#endif
+  return errno == EEXIST;
+}
+
+static unsigned long coverage_process_id(void) {
+#if defined(_WIN32)
+  return (unsigned long)_getpid();
+#else
+  return (unsigned long)getpid();
+#endif
+}
+
+static void coverage_timestamp(char *out, size_t cap) {
+  time_t now = time(NULL);
+  struct tm parts = {0};
+  struct tm *local = localtime(&now);
+  if (local) parts = *local;
+  strftime(out, cap, "%Y%m%d_%H%M%S", &parts);
+}
+
+static int coverage_set_env(const char *name, const char *value) {
+#if defined(_WIN32)
+  return _putenv_s(name, value) == 0;
+#else
+  return setenv(name, value, 1) == 0;
+#endif
+}
+
+static int coverage_copy_file(const char *src, const char *dst) {
+  FILE *in = fopen(src, "rb");
+  if (!in) return 0;
+  FILE *out = fopen(dst, "wb");
+  if (!out) {
+    fclose(in);
+    return 0;
+  }
+  char buf[16384];
+  int ok = 1;
+  for (;;) {
+    size_t got = fread(buf, 1, sizeof(buf), in);
+    if (got && fwrite(buf, 1, got, out) != got) ok = 0;
+    if (got < sizeof(buf)) {
+      if (ferror(in)) ok = 0;
+      break;
+    }
+  }
+  if (fclose(out) != 0) ok = 0;
+  fclose(in);
+  return ok;
+}
+
+static int coverage_copy_saves(void) {
+  if (!g_coverage_bundle_dir[0]) return 0;
+  char saves_dir[1100];
+  snprintf(saves_dir, sizeof(saves_dir), "%s/saves", g_coverage_bundle_dir);
+  coverage_mkdir(saves_dir);
+  int copied = 0;
+  char dst[1200];
+  snprintf(dst, sizeof(dst), "%s/smrpg.srm", saves_dir);
+  copied += coverage_copy_file("saves/smrpg.srm", dst);
+  for (int slot = 0; slot < 12; slot++) {
+    char src[128];
+    RtlSaveSlotPath(slot, src, sizeof(src));
+    snprintf(dst, sizeof(dst), "%s/smrpg%d.sav", saves_dir, slot);
+    copied += coverage_copy_file(src, dst);
+  }
+  return copied;
+}
+
+static int coverage_setup_bundle(void) {
+  if (!coverage_truthy(getenv("SNESRECOMP_COVERAGE_PROOF")) &&
+      !smrpg_coverage_proof_capture_enabled()) {
+    return 1;
+  }
+
+  const char *root = getenv("SNESRECOMP_COVERAGE_BUNDLE_DIR");
+  if (!root || !root[0]) root = "coverage_bundles";
+  if (!coverage_mkdir(root)) return 0;
+
+  char stamp[32];
+  coverage_timestamp(stamp, sizeof(stamp));
+  for (int attempt = 0; attempt < 100; attempt++) {
+    char suffix[16] = {0};
+    if (attempt) snprintf(suffix, sizeof(suffix), "_%02d", attempt);
+    snprintf(g_coverage_bundle_dir, sizeof(g_coverage_bundle_dir),
+             "%s/smrpg_%s_p%lu%s", root, stamp, coverage_process_id(), suffix);
+    if (coverage_mkdir(g_coverage_bundle_dir)) break;
+    g_coverage_bundle_dir[0] = '\0';
+  }
+  if (!g_coverage_bundle_dir[0]) return 0;
+
+  snprintf(g_coverage_manifest_path, sizeof(g_coverage_manifest_path),
+           "%s/tier2_super_mario_rpg.json", g_coverage_bundle_dir);
+  snprintf(g_coverage_journal_path, sizeof(g_coverage_journal_path),
+           "%s/tier2_super_mario_rpg.jsonl", g_coverage_bundle_dir);
+  if (!coverage_set_env("SNESRECOMP_TIER2_MANIFEST",
+                        g_coverage_manifest_path) ||
+      !coverage_set_env("SNESRECOMP_TIER2_JOURNAL",
+                        g_coverage_journal_path) ||
+      !coverage_set_env("SNESRECOMP_COVERAGE_PROOF_DIR",
+                        g_coverage_bundle_dir)) {
+    return 0;
+  }
+  host_report_breadcrumb("coverage proof bundle: %s", g_coverage_bundle_dir);
+  fprintf(stderr, "[smrpg] coverage proof bundle: %s\n", g_coverage_bundle_dir);
+  return 1;
+}
+
+static void coverage_write_summary(long frames, int saves_copied) {
+  if (!g_coverage_bundle_dir[0]) return;
+  int sites = 0;
+  unsigned long long clean = 0;
+  unsigned long long bail = 0;
+  interp_tier2_stats(&sites, &clean, &bail);
+
+  char path[1200];
+  snprintf(path, sizeof(path), "%s/coverage_proof_summary.json",
+           g_coverage_bundle_dir);
+  FILE *out = fopen(path, "wb");
+  if (!out) {
+    fprintf(stderr, "[smrpg] unable to write coverage proof summary: %s\n",
+            path);
+    return;
+  }
+  fprintf(out,
+          "{\n"
+          "  \"schema\": \"smrpg coverage proof bundle v1\",\n"
+          "  \"proof_level\": \"coverage_bundle_v1\",\n"
+          "  \"note\": \"Tier2 targets are observed coverage. Native static "
+          "promotion still requires offline qualification.\",\n"
+          "  \"frames\": %ld,\n"
+          "  \"distinct_sites\": %d,\n"
+          "  \"clean_hits\": %llu,\n"
+          "  \"bail_hits\": %llu,\n"
+          "  \"saves_copied\": %d,\n"
+          "  \"manifest\": \"tier2_super_mario_rpg.json\",\n"
+          "  \"journal\": \"tier2_super_mario_rpg.jsonl\"\n"
+          "}\n",
+          frames, sites, clean, bail, saves_copied);
+  fclose(out);
+}
+
+static void apply_widescreen_selection(RecompLauncherCSettings *settings) {
+  settings->adaptive_view = smrpg_widescreen_enabled() ? 1 : 0;
+  settings->widescreen_hud = smrpg_widescreen_hud_enabled() ? 1 : 0;
+
+  const char *widescreen = getenv("SNESRECOMP_WIDESCREEN");
+  if (widescreen && widescreen[0]) {
+    settings->adaptive_view =
+        strcmp(widescreen, "Adaptive") == 0 ||
+        strcmp(widescreen, "adaptive") == 0 ||
+        strtol(widescreen, NULL, 0) != 0;
+  }
+  const char *hud = getenv("SNESRECOMP_WIDESCREEN_HUD");
+  if (hud && hud[0]) settings->widescreen_hud = strtol(hud, NULL, 0) != 0;
+}
 
 static uint8_t *read_rom(const char *path, size_t *size_out) {
   FILE *stream = fopen(path, "rb");
@@ -125,22 +323,6 @@ static int resolve_rom(int argc, char **argv, char *path, size_t path_size,
   settings->volume = 100;
   settings->player_src[0] = 1;
   settings->deadzone[0] = 25;
-  settings->adaptive_view = 1;
-  settings->widescreen_hud = 1;
-  {
-    /* Match the established SNESRecomp diagnostic override. Adaptive 16:9 is
-     * the game default; the launcher or environment can select authentic
-     * native-width presentation without changing guest state. */
-    const char *widescreen = getenv("SNESRECOMP_WIDESCREEN");
-    if (widescreen && widescreen[0]) {
-      settings->adaptive_view =
-          strcmp(widescreen, "Adaptive") == 0 ||
-          strcmp(widescreen, "adaptive") == 0 ||
-          strtol(widescreen, NULL, 0) != 0;
-    }
-    const char *hud = getenv("SNESRECOMP_WIDESCREEN_HUD");
-    if (hud && hud[0]) settings->widescreen_hud = strtol(hud, NULL, 0) != 0;
-  }
 
   if (argc > 1) {
     snprintf(path, path_size, "%s", argv[1]);
@@ -159,9 +341,10 @@ static int resolve_rom(int argc, char **argv, char *path, size_t path_size,
   game.num_players = 1;
   game.sram_path = "saves/smrpg.srm";
   game.widescreen_supported = 0;
-  game.adaptive_view_supported = 1;
-  game.aspect_experimental = 1;
+  game.adaptive_view_supported = 0;
+  game.aspect_experimental = 0;
   game.rom_cache_path = "rom.cfg";
+  game.mods = g_mods_ready ? snes_mod_runtime_launcher_provider_c() : NULL;
 
   char initial_rom[1024] = {0};
   char assets_dir[1024] = ".";
@@ -442,6 +625,21 @@ static int update_adaptive_widescreen(SDL_Renderer *renderer,
 int main(int argc, char **argv) {
   SDL_SetMainReady();
   host_report_init(kWindowTitle, kBuildVersion);
+  g_mods_ready = snes_mod_runtime_initialize_c(
+      smrpg_mod_root(), "super-mario-rpg-us", kSmrpgSha256Hex);
+  if (!g_mods_ready) {
+    fprintf(stderr, "SNES mods unavailable: %s\n",
+            snes_mod_runtime_last_error_c());
+  } else {
+    const RecompLauncherCModProvider *provider =
+        snes_mod_runtime_launcher_provider_c();
+    int features = provider && provider->feature_count
+                       ? provider->feature_count(provider->ctx) : 0;
+    host_report_breadcrumb("SNES mods ready: root=%s features=%d",
+                           smrpg_mod_root(), features);
+    fprintf(stderr, "[smrpg] SNES mods ready: root=%s features=%d\n",
+            smrpg_mod_root(), features);
+  }
   char rom_path[1024] = {0};
   RecompLauncherCSettings launcher_settings;
   int resolve_result =
@@ -454,6 +652,21 @@ int main(int argc, char **argv) {
             rom_path);
     free(rom);
     return 2;
+  }
+  if (g_mods_ready) {
+    if (!snes_mod_runtime_commit_c(rom_path)) {
+      fprintf(stderr, "SNES mod plan rejected: %s\n",
+              snes_mod_runtime_last_error_c());
+      free(rom);
+      return 2;
+    }
+    snes_mod_runtime_activate_plugins_c();
+  }
+  apply_widescreen_selection(&launcher_settings);
+  if (!coverage_setup_bundle()) {
+    fprintf(stderr, "Unable to create the coverage proof bundle folder.\n");
+    free(rom);
+    return 4;
   }
 
   /* SDL_Init flipped to true-on-success in SDL3 and inverts silently in its
@@ -661,6 +874,11 @@ int main(int argc, char **argv) {
   if (!write_frame_bmp(frame_dump, pixels, logical_width, kFrameHeight))
     fprintf(stderr, "Unable to write frame dump: %s\n", frame_dump);
   RtlWriteSram();
+  if (g_coverage_bundle_dir[0]) {
+    Tier2CoverageWriteDefaultManifest(SmrpgGameInfo()->title);
+    tier2_capture_close();
+    coverage_write_summary(frames, coverage_copy_saves());
+  }
   debug_server_shutdown();
   snesrecomp_sdl_pause_audio_device(audio, true);
 #if SNESRECOMP_SDL3

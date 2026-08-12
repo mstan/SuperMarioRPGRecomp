@@ -6,6 +6,8 @@ set(SNESRECOMP_ROOT "${CMAKE_SOURCE_DIR}/snesrecomp" CACHE PATH
     "Path to the SA-1-capable snesrecomp checkout (./snesrecomp submodule)")
 set(SNESRECOMP_SDL_BACKEND "SDL3" CACHE STRING
     "Desktop SDL backend")
+set(SNESRECOMP_ENABLE_MODS ON CACHE BOOL
+    "Enable SMRPG's built-in mod catalog and SNES mod packages" FORCE)
 include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 
 # The SHARED recomp-ui launcher, consumed as the ./recomp-ui submodule like
@@ -61,6 +63,8 @@ add_executable(SuperMarioRPGSNESRecomp
     "${SNESRECOMP_ROOT}/runner/src/host_report.c"
     "${SNESRECOMP_ROOT}/runner/src/keybinds.c"
     ${SMRPG_GEN_SOURCES}
+    src/mods/smrpg_coverage_plugin.c
+    src/mods/smrpg_widescreen_plugin.c
     src/sdl_main.c
     src/smrpg_runtime.c)
 
@@ -87,6 +91,14 @@ configure_smrpg_target(SuperMarioRPGSNESRecomp)
 # Hosts include "desktop/sdl_compat.h" rather than <SDL.h> so both majors build.
 snesrecomp_target_sdl(SuperMarioRPGSNESRecomp)
 recomp_target_launcher_ui(SuperMarioRPGSNESRecomp CONSOLE snes)
+
+set(SMRPG_PRELOADED_MODS "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded")
+if(EXISTS "${SMRPG_PRELOADED_MODS}/packages")
+    add_custom_command(TARGET SuperMarioRPGSNESRecomp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${SMRPG_PRELOADED_MODS}"
+                "$<TARGET_FILE_DIR:SuperMarioRPGSNESRecomp>/mods")
+endif()
 
 if(SNESRECOMP_BUILD_VERSION)
     target_compile_definitions(SuperMarioRPGSNESRecomp PRIVATE

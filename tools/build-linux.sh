@@ -61,9 +61,12 @@ PREBUILD_CMD=""
 POSTBUILD_CMD=""
 BOXART="recomp/launcher/boxart.tga"          # AppImage icon source (optional)
 EXTRA_PAYLOAD=()                             # repo-relative files -> usr/bin/
-# No release-owned mod catalog: widescreen is incomplete on this title and is
-# deliberately not shipped as a mod, so there is nothing to require here.
-REQUIRED_MOD_MANIFESTS=()
+# Release-owned mod catalog: these manifests must be staged beside the ELF so
+# the AppImage can seed/refresh them beside the user's AppImage at launch.
+REQUIRED_MOD_MANIFESTS=(
+  "packages/super-mario-rpg.diagnostics.coverage-proof/1.0.0/manifest.toml"
+  "packages/super-mario-rpg.enhancement.widescreen/1.0.0/manifest.toml"
+)
 PROD_CMAKE_FLAGS=( -DSNESRECOMP_ENABLE_TRACE=OFF )
 DEBUG_CMAKE_FLAGS=( -DSNESRECOMP_ENABLE_TRACE=ON )
 # ============================================================================

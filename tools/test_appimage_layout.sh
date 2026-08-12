@@ -14,8 +14,9 @@
 #   3. moving the .AppImage re-anchors state beside the new location;
 #   4. nothing is ever written inside the read-only AppDir payload.
 #
-# Super Mario RPG ships no mod packages, so the catalog assertions are
-# conditional on the payload actually carrying one.
+# Super Mario RPG now ships a release-owned mod catalog; the catalog assertions
+# are still conditional so this layout test remains useful for debug/no-package
+# builds that intentionally do not stage one.
 #
 # It also has no config.ini: unlike the other SNES recomps (which inherited a
 # config module from their decomp ports) SMRPG is a from-scratch scaffold whose

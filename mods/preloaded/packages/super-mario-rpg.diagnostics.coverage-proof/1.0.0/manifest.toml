@@ -1,0 +1,24 @@
+format_version = 1
+id = "super-mario-rpg.diagnostics.coverage-proof"
+version = "1.0.0"
+name = "Super Mario RPG Coverage Proof"
+author = "mstan"
+description = "Captures a shareable coverage proof bundle during normal play. The bundle includes tier-2 coverage logs, a final manifest, a summary, and save files when present."
+license = "MIT"
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "super-mario-rpg-us"
+rom_sha256 = "740646f3535bfb365ca44e70d46ab433467b142bd84010393070bd0b141af853"
+
+[[feature]]
+id = "coverage-proof-capture"
+name = "Coverage proof capture"
+description = "Write a coverage_bundles/smrpg_<timestamp> folder for this play session so the observed route can be inspected and merged later."
+group = "Diagnostics"
+default_enabled = false
+
+[[plugin]]
+feature = "coverage-proof-capture"
+id = "super-mario-rpg.coverage-proof"

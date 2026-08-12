@@ -27,14 +27,16 @@ snesrecomp's own runner implementations (`snesrecomp/runner/`).
 
 The ROM is **never** redistributed — you supply your own legally-dumped copy.
 
-## Current status: preview quality, coverage QA release (v0.0.2)
+## Current status: preview quality, Mods and coverage QA release (v0.0.3)
 
 This preview boots, runs the attract loop, and holds up under an unattended
-headless soak (see [Qualification](#qualification)) — but **the video output
-has not yet been verified by a human playthrough.** v0.0.2 is the production
-playthrough/coverage release: it preserves the complete recompiler-actionable
-dispatch-miss set in unique per-run files, including after an abnormal exit.
-See [RELEASE_NOTES_v0.0.2.md](RELEASE_NOTES_v0.0.2.md) for the exact collection
+headless soak (see [Qualification](#qualification)). v0.0.3 adds the built-in
+Mods catalog, moves widescreen to an opt-in Mods-tab entry, adds an opt-in
+coverage proof capture mod that writes shareable bundles, and imports the
+first user early-route coverage bundle into the static coverage profile. A
+short early-game replay segment has been checked against the regenerated build,
+but this is still **not** a completed end-to-end human playthrough.
+See [RELEASE_NOTES_v0.0.3.md](RELEASE_NOTES_v0.0.3.md) for the exact collection
 rules and the full list of changes and limitations.
 
 ## Required ROM
@@ -151,12 +153,12 @@ Install [MSYS2](https://www.msys2.org/) with the mingw64 toolchain (`cmake`,
 ```bash
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/SDL3/x86_64-w64-mingw32 \
-  "-DSNESRECOMP_BUILD_VERSION:STRING=0.0.2"
+  "-DSNESRECOMP_BUILD_VERSION:STRING=0.0.3"
 cmake --build build-release --target SuperMarioRPGSNESRecomp
 ```
 
 (Quote `SNESRECOMP_BUILD_VERSION` exactly like that — PowerShell rewrites an
-unquoted `-DSNESRECOMP_BUILD_VERSION=0.0.2` into `0`.) SDL3 is the default;
+unquoted `-DSNESRECOMP_BUILD_VERSION=0.0.3` into `0`.) SDL3 is the default;
 SDL2 remains a supported fallback via `-DSNESRECOMP_SDL_BACKEND=SDL2`. To
 package a zip the way releases are built, see `tools/make_release.ps1`
 (builds and stamps the version separately; the script only packages).
@@ -172,7 +174,7 @@ script configures, builds, and wraps the result into a self-contained
 x86_64 AppImage in one step:
 
 ```bash
-bash tools/build-linux.sh --regen --version 0.0.2
+bash tools/build-linux.sh --regen --version 0.0.3
 ```
 
 State (`rom.cfg`, `keybinds.ini`, `saves/`) lives next to the `.AppImage`,
@@ -197,7 +199,8 @@ regeneration — see [Qualification](#qualification).
 
 ## Adaptive widescreen
 
-Adaptive view is on by default. It requests a 398x224 (16:9) framebuffer and
+Adaptive view is an opt-in Mods-tab feature. Enable the built-in Widescreen
+mod from the launcher's Mods page to request a 398x224 (16:9) framebuffer and
 recognizes SMRPG's validated Mode-1 field contract without changing any
 guest PPU register. The host matches the complete 32x28 live viewport
 against the game's decompressed 128x128 field maps, then streams only
@@ -207,19 +210,15 @@ geometry: a camera at one room edge may keep a black margin on that side
 while using the available width on the other. Packed maps with only the
 game's unlocked default bounds use connectivity filtering, so adjacent
 authored geometry can extend without exposing a neighboring room across an
-intervening void. Authentic 4:3 remains available from the recomp-ui
-launcher's Display view-mode control.
+intervening void. Leave the Widescreen mod disabled for authentic 4:3 output.
 
-Menus and the battle arena remain native-width. With widescreen HUD enabled
-(the default), the captured battle HUD contract anchors Mario's BG2 HP panel
-and OAM slots 0-7 (portrait and command diamond) to the adaptive edge while
-leaving actors in authentic world coordinates. Set
-`SNESRECOMP_WIDESCREEN_HUD=0` for a centered-HUD parity comparison, or
-`SNESRECOMP_WIDESCREEN=0` to disable adaptive view entirely.
-
-Unlike the other titles in this family, Super Mario RPG does not ship a
-separate opt-in "true widescreen" mod package — adaptive view is the only
-wide presentation mode, and it is on by default rather than opt-in.
+Menus and the battle arena remain native-width. With the Widescreen mod's HUD
+option set to `Split to edges` (the default), the captured battle HUD contract
+anchors Mario's BG2 HP panel and OAM slots 0-7 (portrait and command diamond)
+to the adaptive edge while leaving actors in authentic world coordinates. Set
+the mod option to `Authentic centered` for a centered-HUD parity comparison.
+For developer parity checks, `SNESRECOMP_WIDESCREEN=1` and
+`SNESRECOMP_WIDESCREEN_HUD=0` remain available as environment overrides.
 
 ## Trace builds / debug server
 
@@ -257,10 +256,14 @@ failed attract-soak thresholds. Useful environment variables:
 
 ### Production coverage playthrough
 
-Use a normal Production build and leave both Tier-2 path overrides unset. At
-the first sighting of each distinct `(site, target, M/X, kind)` gap, the game
-appends one complete line to the per-run `.jsonl` journal and flushes it. A
-normal quit also writes a unique merge-ready `.json` manifest with hit counts
+For the easiest shareable capture, enable the built-in `Coverage proof capture`
+mod on the launcher's Mods page and then play normally. The game writes a
+`coverage_bundles/smrpg_<timestamp>_p<PID>/` folder containing the per-run
+manifest, append-only journal, a summary, and save files when present.
+
+At the first sighting of each distinct `(site, target, M/X, kind)` gap, the
+game appends one complete line to the per-run `.jsonl` journal and flushes it.
+A normal quit also writes a unique merge-ready `.json` manifest with hit counts
 and RAM-routine evidence. Repeat launches create new files instead of replacing
 earlier sessions.
 
@@ -316,7 +319,7 @@ have 0.989 correlation after accounting for the same approximately 100 ms
 startup phase offset; RMS levels agree within 0.6%.
 
 **All of the above is automated attract-loop / headless-soak measurement —
-none of it is a human playthrough.** See [Current status](#current-status-preview-quality-coverage-qa-release-v002).
+none of it is a completed human playthrough.** See [Current status](#current-status-preview-quality-mods-and-coverage-qa-release-v003).
 
 The current generation contains 2 qualified exact AOT variants (recorded in
 `recomp/tier2_coverage.json`'s `qualified_aot_targets`), with everything
