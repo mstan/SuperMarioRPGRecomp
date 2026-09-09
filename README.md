@@ -367,7 +367,7 @@ python3 tools/ingest_smrpg_disassembly.py \
 
 ## License
 
-Not yet declared. Code in this repo is original.
+PolyForm Noncommercial 1.0.0. See `LICENSE`. Code in this repo is original.
 
 The *Super Mario RPG* ROM and any data extracted from it are **not** in
 this repo and are not licensed for redistribution.
