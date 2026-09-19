@@ -268,16 +268,10 @@ static void coverage_write_summary(long frames, int saves_copied) {
 }
 
 static void apply_widescreen_selection(RecompLauncherCSettings *settings) {
+  /* The Mods selection owns the renderer, including direct ROM launches.
+   * Old launcher settings/environment overrides must not enable it. */
   settings->adaptive_view = smrpg_widescreen_enabled() ? 1 : 0;
   settings->widescreen_hud = 0;
-
-  const char *widescreen = getenv("SNESRECOMP_WIDESCREEN");
-  if (widescreen && widescreen[0]) {
-    settings->adaptive_view =
-        strcmp(widescreen, "Adaptive") == 0 ||
-        strcmp(widescreen, "adaptive") == 0 ||
-        strtol(widescreen, NULL, 0) != 0;
-  }
 }
 
 static uint8_t *read_rom(const char *path, size_t *size_out) {
@@ -659,6 +653,8 @@ int main(int argc, char **argv) {
   }
   apply_widescreen_selection(&launcher_settings);
   SmrpgSetCustomRendererEnabled(launcher_settings.adaptive_view != 0);
+  fprintf(stderr, "[smrpg] Renderer: %s\n", launcher_settings.adaptive_view
+      ? "custom widescreen" : "native PPU (4:3)");
   if (!coverage_setup_bundle()) {
     fprintf(stderr, "Unable to create the coverage proof bundle folder.\n");
     free(rom);

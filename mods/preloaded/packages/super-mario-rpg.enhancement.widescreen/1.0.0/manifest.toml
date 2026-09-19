@@ -1,9 +1,9 @@
 format_version = 1
 id = "super-mario-rpg.enhancement.widescreen"
 version = "1.0.0"
-name = "Super Mario RPG Custom Renderer"
+name = "Super Mario RPG Widescreen"
 author = "mstan"
-description = "Experimental custom field renderer: reveal scenery and actors beyond the native camera without widening the emulated PPU."
+description = "Optional widescreen custom renderer. Disabled by default; normal play uses the original 4:3 renderer."
 license = "MIT"
 resolver = "declarative"
 save_compatibility = "shared"
@@ -14,8 +14,8 @@ rom_sha256 = "740646f3535bfb365ca44e70d46ab433467b142bd84010393070bd0b141af853"
 
 [[feature]]
 id = "widescreen"
-name = "Custom field renderer (experimental)"
-description = "Reveal more of the current map and any existing battle backdrop borders. Menus, title and unsupported scenes retain the native view. Some actor effects remain incomplete."
+name = "Widescreen (custom renderer)"
+description = "Enable the experimental custom renderer to reveal more of the map and existing battle backdrop borders. Disable for the original 4:3 renderer. Menus and title retain the native view. Some actor effects remain incomplete."
 group = "Display"
 default_enabled = false
 

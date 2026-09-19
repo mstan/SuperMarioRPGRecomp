@@ -199,9 +199,11 @@ regeneration — see [Qualification](#qualification).
 
 ## Custom field renderer (experimental)
 
-Enable **Super Mario RPG Custom Renderer** in Mods and choose **Fit to
-window**, **16:9**, or **21:9**. The host reveals additional horizontal
-scenery and actors while the guest PPU stays at 256x224. Standard battle
+The original renderer at **4:3** is the default. To opt in, enable
+**Widescreen (custom renderer)** in Mods and choose **Fit to window**,
+**16:9**, or **21:9**. Disabling the mod restores the original renderer.
+The custom renderer reveals additional horizontal scenery and actors while
+the guest PPU stays at 256x224. Standard battle
 backgrounds reveal only existing artwork beyond the native view; the
 castle arena has eight extra pixels per side. Menus, the title and
 unsupported scenes keep the native view. Special actor transforms, shadows
@@ -209,7 +211,7 @@ and some effects remain incomplete in the added field area.
 
 See [custom-renderer.md](docs/custom-renderer.md) for the architecture,
 current limits, validation, paired engine branch and build instructions.
-To try the isolated Windows build with Fit enabled on first use:
+To try the isolated Windows build, then select widescreen in Mods if wanted:
 
 ```powershell
 ./tools/run_custom_renderer.ps1

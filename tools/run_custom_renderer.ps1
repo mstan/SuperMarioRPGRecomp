@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    # Supplying a ROM bypasses the Mods launcher. Omit to configure mods.
     [string]$DirectRomPath,
     [string]$RuntimeBin = 'C:\msys64\mingw64\bin',
     [switch]$CheckOnly,
@@ -34,21 +35,8 @@ $rendererMods = Join-Path $rendererData 'mods\preloaded'
 [void](New-Item -ItemType Directory -Path $rendererMods -Force)
 Copy-Item -LiteralPath (Join-Path $rendererRoot 'mods\preloaded\packages') `
     -Destination $rendererMods -Recurse -Force
-$rendererState = Join-Path $rendererMods 'state.toml'
-if (-not (Test-Path -LiteralPath $rendererState)) {
-    @'
-format_version = 1
-[[package]]
-id = "super-mario-rpg.enhancement.widescreen"
-version = "1.0.0"
-[[feature]]
-package_id = "super-mario-rpg.enhancement.widescreen"
-id = "widescreen"
-enabled = true
-[feature.values]
-aspect = "fit"
-'@ | Set-Content -LiteralPath $rendererState -Encoding ASCII
-}
+# Let Mods initialize its defaults (stock 4:3) and preserve saved choices.
+# Staging the custom renderer must not opt the player into widescreen.
 if (-not $DirectRomPath -and -not (Test-Path -LiteralPath (Join-Path $rendererData 'smrpg.sfc'))) {
     $rendererRom = Join-Path $rendererRoot 'smrpg.sfc'
     if (Test-Path -LiteralPath $rendererRom) {

@@ -1,8 +1,11 @@
 # Experimental custom field renderer
 
-Enable **Super Mario RPG Custom Renderer** in Mods, then choose **Fit to
-window**, **16:9**, or **21:9**. Fit reveals additional horizontal map area as
-the window grows. It keeps the native 224-line height and 7:6 pixel aspect;
+The default is the original PPU renderer at **4:3**. Enable
+**Widescreen (custom renderer)** in Mods, then choose **Fit to window**,
+**16:9**, or **21:9** to opt in. Disabling the mod restores the original
+renderer, with no custom composition or actor observation in normal play.
+Fit reveals additional horizontal map area as the window grows. It keeps
+the native 224-line height and 7:6 pixel aspect;
 it does not zoom out vertically to fit an entire level. The logical width is
 256–1024 pixels, approximately 4:3 through 16:3. Narrow windows and fixed
 ratios use letterboxing. Standard battle backgrounds expose any authored
@@ -22,10 +25,13 @@ From this game worktree:
 ```
 
 The helper refreshes a copy of the executable, assets, and mod catalog under
-`build-custom/playtest`. Its first run enables the custom renderer with Fit.
-Later runs preserve that playtest's settings and saves. It uses the verified
+`build-custom/playtest`. New settings start with widescreen disabled; enable
+it in Mods to use the custom renderer. Existing mod choices and saves are
+preserved, including choices saved by earlier playtest builds. Earlier
+helpers enabled widescreen automatically; disable it once in Mods if you
+want stock rendering in that existing playtest. It uses the verified
 `smrpg.sfc` in this worktree when available; the launcher can also choose a
-ROM. To skip the launcher:
+ROM. To skip the launcher and use the saved mod selection:
 
 ```powershell
 ./tools/run_custom_renderer.ps1 -DirectRomPath ./smrpg.sfc
@@ -161,11 +167,19 @@ traces and audio counters, and zero audio underruns. The trace SHA-256 is
 Both logged the same 115 existing APU frame-boundary sync timeouts after
 state restore; renderer parity does not resolve that audio timing issue.
 
+The mod-default follow-up (`beads-4c5.7`) passed four isolated 120-frame
+desktop runs: fresh defaults, saved widescreen at 21:9, disabled again, and
+disabled with diagnostic capture. Stock runs produced identical 256x224
+images; opting in produced 448x224. Opposite legacy environment overrides
+did not bypass the mod selection. Preparing the helper again preserved the
+saved selection and an unrelated save. Evidence is retained under
+`build-custom/qa-opt-in-y721azql`; Release build and renderer CTest passed.
+
 Useful environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `SNESRECOMP_WIDESCREEN=1` | Desktop custom-renderer override. |
+| `SNESRECOMP_WIDESCREEN` | Legacy desktop override; ignored. Use the Mods toggle. |
 | `SNESRECOMP_WIDESCREEN_EXTRA=214` | Headless width 684; use 0 for native. |
 | `SNESRECOMP_STATE_TRACE_FILE=state.txt` | Per-frame guest-memory hashes and clocks. |
 | `SMRPG_RENDER_CAPTURE=frame.srpg` | Save one immutable renderer frame. |

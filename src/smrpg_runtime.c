@@ -274,7 +274,6 @@ void SmrpgDrawPpuFrame(void) {
   }
   if (capture) {
     SmrpgRendererEndFrame(s_native_frame);
-    if (s_output) SmrpgRendererDraw(s_output, s_output_pitch, SmrpgWidescreenWidth());
     const char *at = getenv("SMRPG_RENDER_CAPTURE_FRAME");
     if (capture_path && at && s_host_frames == (unsigned)strtoul(at, NULL, 0))
       SmrpgRendererSaveCapture(capture_path);
@@ -285,7 +284,11 @@ void SmrpgDrawPpuFrame(void) {
       snprintf(path, sizeof(path), "%s/frame-%06u.srpg", capture_dir, s_host_frames);
       if (!SmrpgRendererSaveCapture(path)) fprintf(stderr, "Unable to write renderer capture: %s\n", path);
     }
+  }
+  if (s_output && s_custom_renderer_enabled) {
+    SmrpgRendererDraw(s_output, s_output_pitch, SmrpgWidescreenWidth());
   } else if (s_output) {
+    /* Diagnostic captures do not opt stock rendering into the compositor. */
     for (unsigned y = 0; y < 224; ++y)
       memcpy(s_output + y * s_output_pitch, s_native_frame + y * 256, 256 * 4);
   }
