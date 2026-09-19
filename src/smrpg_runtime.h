@@ -10,7 +10,7 @@ const RtlGameInfo *SmrpgGameInfo(void);
 void SmrpgBeginDrawing(uint8_t *pixels, size_t pitch);
 void SmrpgDrawPpuFrame(void);
 void SmrpgSetWidescreenExtra(int extra);
-void SmrpgSetWidescreenHud(bool enabled);
+void SmrpgSetCustomRendererEnabled(bool enabled);
 int SmrpgWidescreenWidth(void);
 uint32_t SmrpgResumePc(void);
 int SmrpgLastLleResult(void);

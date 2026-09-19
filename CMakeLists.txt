@@ -34,6 +34,8 @@ endif()
 
 list(REMOVE_ITEM SNESRECOMP_RUNNER_SOURCES
     "${SNESRECOMP_ROOT}/runner/src/keybinds.c"
+    "${SNESRECOMP_ROOT}/runner/src/snes_savestate_menu.c"
+    "${SNESRECOMP_ROOT}/runner/src/snes_osd.c"
     "${SNESRECOMP_ROOT}/runner/src/host_report.c")
 
 # The headless host keeps its own host_report stubs: it links no SDL, and
@@ -43,7 +45,8 @@ add_executable(SuperMarioRPGSNESRecompHeadless
     ${SMRPG_GEN_SOURCES}
     src/headless_host.c
     src/headless_main.c
-    src/smrpg_runtime.c)
+    src/smrpg_runtime.c
+    src/smrpg_renderer.c)
 
 # The desktop host takes the REAL host_report.c: it owns the always-on
 # breadcrumb ring, the crash minidump writer and the build-version stamp that
@@ -66,7 +69,8 @@ add_executable(SuperMarioRPGSNESRecomp
     src/mods/smrpg_coverage_plugin.c
     src/mods/smrpg_widescreen_plugin.c
     src/sdl_main.c
-    src/smrpg_runtime.c)
+    src/smrpg_runtime.c
+    src/smrpg_renderer.c)
 
 function(configure_smrpg_target target)
     target_include_directories(${target} PRIVATE
@@ -88,17 +92,21 @@ endfunction()
 
 configure_smrpg_target(SuperMarioRPGSNESRecompHeadless)
 configure_smrpg_target(SuperMarioRPGSNESRecomp)
+
+add_executable(smrpg_render_capture tools/render_capture.c src/smrpg_renderer.c)
+target_include_directories(smrpg_render_capture PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(smrpg_renderer_test tests/renderer_test.c)
+    target_include_directories(smrpg_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+    add_test(NAME smrpg_renderer COMMAND smrpg_renderer_test)
+endif()
 # Hosts include "desktop/sdl_compat.h" rather than <SDL.h> so both majors build.
 snesrecomp_target_sdl(SuperMarioRPGSNESRecomp)
 recomp_target_launcher_ui(SuperMarioRPGSNESRecomp CONSOLE snes)
 
-set(SMRPG_PRELOADED_MODS "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded")
-if(EXISTS "${SMRPG_PRELOADED_MODS}/packages")
-    add_custom_command(TARGET SuperMarioRPGSNESRecomp POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${SMRPG_PRELOADED_MODS}"
-                "$<TARGET_FILE_DIR:SuperMarioRPGSNESRecomp>/mods")
-endif()
+snesrecomp_target_mod_catalog(SuperMarioRPGSNESRecomp
+    "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded")
 
 if(SNESRECOMP_BUILD_VERSION)
     target_compile_definitions(SuperMarioRPGSNESRecomp PRIVATE

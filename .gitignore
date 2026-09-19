@@ -11,6 +11,7 @@ smrpg.sfc
 captures/
 /coverage_bundles/
 /mods/state.toml
+/mods/preloaded/state.toml
 /tier2_coverage.json
 /tier2_*.json
 /tier2_*.jsonl

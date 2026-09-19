@@ -1,9 +1,9 @@
 format_version = 1
 id = "super-mario-rpg.enhancement.widescreen"
 version = "1.0.0"
-name = "Super Mario RPG Widescreen"
+name = "Super Mario RPG Custom Renderer"
 author = "mstan"
-description = "Enables Super Mario RPG's adaptive widescreen viewport and optional edge-aware HUD placement."
+description = "Experimental custom field renderer: reveal scenery and actors beyond the native camera without widening the emulated PPU."
 license = "MIT"
 resolver = "declarative"
 save_compatibility = "shared"
@@ -14,27 +14,31 @@ rom_sha256 = "740646f3535bfb365ca44e70d46ab433467b142bd84010393070bd0b141af853"
 
 [[feature]]
 id = "widescreen"
-name = "Widescreen"
-description = "Follow the live window aspect at the native 224-line height, expanding the viewport when there is safe horizontal room."
+name = "Custom field renderer (experimental)"
+description = "Reveal more of the current map. Menus, battles and unsupported scenes retain the native view. Some actor effects remain incomplete."
 group = "Display"
 default_enabled = false
 
 [[option]]
 feature = "widescreen"
-id = "hud"
-label = "HUD"
-description = "Split moves supported HUD elements toward the wider viewport edges. Authentic keeps stock 4:3 placement."
+id = "aspect"
+label = "Viewport"
+description = "Fit follows the window while keeping the original pixel aspect. Fixed ratios use letterboxing."
 group = "Display"
 type = "choice"
-default = "split"
+default = "fit"
 
 [[option.choice]]
-value = "split"
-label = "Split to edges"
+value = "fit"
+label = "Fit to window"
 
 [[option.choice]]
-value = "authentic"
-label = "Authentic centered"
+value = "16:9"
+label = "16:9"
+
+[[option.choice]]
+value = "21:9"
+label = "21:9"
 
 [[plugin]]
 feature = "widescreen"

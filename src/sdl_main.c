@@ -1,4 +1,5 @@
 #include "smrpg_runtime.h"
+#include "smrpg_renderer.h"
 
 #include "common_rtl.h"
 #include "cpu_trace.h"
@@ -114,7 +115,7 @@ static int coverage_truthy(const char *value) {
 
 static const char *smrpg_mod_root(void) {
   static char path[1024];
-  if (snesrecomp_exe_dir_path("mods", path, sizeof(path)))
+  if (snesrecomp_exe_dir_path("mods/preloaded", path, sizeof(path)))
     return path;
   return "mods/preloaded";
 }
@@ -268,7 +269,7 @@ static void coverage_write_summary(long frames, int saves_copied) {
 
 static void apply_widescreen_selection(RecompLauncherCSettings *settings) {
   settings->adaptive_view = smrpg_widescreen_enabled() ? 1 : 0;
-  settings->widescreen_hud = smrpg_widescreen_hud_enabled() ? 1 : 0;
+  settings->widescreen_hud = 0;
 
   const char *widescreen = getenv("SNESRECOMP_WIDESCREEN");
   if (widescreen && widescreen[0]) {
@@ -277,8 +278,6 @@ static void apply_widescreen_selection(RecompLauncherCSettings *settings) {
         strcmp(widescreen, "adaptive") == 0 ||
         strtol(widescreen, NULL, 0) != 0;
   }
-  const char *hud = getenv("SNESRECOMP_WIDESCREEN_HUD");
-  if (hud && hud[0]) settings->widescreen_hud = strtol(hud, NULL, 0) != 0;
 }
 
 static uint8_t *read_rom(const char *path, size_t *size_out) {
@@ -594,13 +593,9 @@ static void update_state_feedback(SDL_Window *window, Uint64 *feedback_until) {
 }
 
 static int adaptive_extra_for_size(int drawable_width, int drawable_height) {
-  if (drawable_width <= 0 || drawable_height <= 0) return 0;
-  int64_t numerator = (int64_t)drawable_width * kFrameHeight -
-                      (int64_t)drawable_height * kFrameWidth;
-  if (numerator <= 0) return 0;
-  int64_t divisor = (int64_t)drawable_height * 2;
-  int64_t extra = (numerator + divisor / 2) / divisor;
-  return extra > kPpuExtraLeftRight ? kPpuExtraLeftRight : (int)extra;
+  if (smrpg_widescreen_aspect() == 1) return (SmrpgRendererFitWidth(16, 9) - 256) / 2;
+  if (smrpg_widescreen_aspect() == 2) return (SmrpgRendererFitWidth(21, 9) - 256) / 2;
+  return (SmrpgRendererFitWidth(drawable_width, drawable_height) - 256) / 2;
 }
 
 static int update_adaptive_widescreen(SDL_Renderer *renderer,
@@ -615,7 +610,7 @@ static int update_adaptive_widescreen(SDL_Renderer *renderer,
     snesrecomp_sdl_get_render_output_size(renderer, &width, &height);
     extra = adaptive_extra_for_size(width, height);
   }
-  if (extra != g_ws_extra) {
+  if (extra != (SmrpgWidescreenWidth() - 256) / 2) {
     SmrpgSetWidescreenExtra(extra);
     SmrpgBeginDrawing(pixels, (size_t)SmrpgWidescreenWidth() * kBytesPerPixel);
   }
@@ -663,6 +658,7 @@ int main(int argc, char **argv) {
     snes_mod_runtime_activate_plugins_c();
   }
   apply_widescreen_selection(&launcher_settings);
+  SmrpgSetCustomRendererEnabled(launcher_settings.adaptive_view != 0);
   if (!coverage_setup_bundle()) {
     fprintf(stderr, "Unable to create the coverage proof bundle folder.\n");
     free(rom);
@@ -727,7 +723,7 @@ int main(int argc, char **argv) {
   SDL_Texture *texture =
       SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
                         SDL_TEXTUREACCESS_STREAMING,
-                        kPpuBufWidth, kFrameHeight);
+                        kSmrpgRenderWidth, kFrameHeight);
   if (!texture) Die("Unable to create the game texture");
   /* Scale quality is per-texture in SDL3 (the SDL2 render hint is gone), and
    * the SNES framebuffer leaves alpha zero, so it must be marked opaque or
@@ -736,9 +732,8 @@ int main(int argc, char **argv) {
                                     launcher_settings.linear_filter != 0);
   snesrecomp_sdl_set_texture_opaque(texture);
 
-  static uint8_t pixels[kPpuBufWidth * kFrameHeight * kBytesPerPixel];
+  static uint8_t pixels[kSmrpgRenderWidth * kFrameHeight * kBytesPerPixel];
   SmrpgSetWidescreenExtra(0);
-  SmrpgSetWidescreenHud(launcher_settings.widescreen_hud != 0);
   SmrpgBeginDrawing(pixels, kFrameWidth * kBytesPerPixel);
 
   SDL_AudioSpec wanted = {0};
@@ -844,6 +839,7 @@ int main(int argc, char **argv) {
           window, 1, slot, &state_feedback_until);
     }
     debug_server_wait_if_paused();
+    int previous_width = logical_width;
     logical_width = update_adaptive_widescreen(
         renderer, launcher_settings.adaptive_view, pixels);
     if (!paused) {
@@ -860,11 +856,25 @@ int main(int argc, char **argv) {
                         logical_width * kBytesPerPixel);
       frames++;
     }
+    if (paused && logical_width != previous_width) {
+      SmrpgRendererDraw(pixels, logical_width * kBytesPerPixel, logical_width);
+      SDL_Rect update_rect = {0, 0, logical_width, kFrameHeight};
+      SDL_UpdateTexture(texture, &update_rect, pixels, logical_width * kBytesPerPixel);
+    }
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_Rect source = {0, 0, logical_width, kFrameHeight};
-    snesrecomp_sdl_render_texture(renderer, texture, &source, NULL);
+    int output_width = 0, output_height = 0;
+    snesrecomp_sdl_get_render_output_size(renderer, &output_width, &output_height);
+    double aspect = logical_width / 192.0;
+    int draw_width = output_width, draw_height = (int)(output_width / aspect + 0.5);
+    if (draw_height > output_height) {
+      draw_height = output_height; draw_width = (int)(output_height * aspect + 0.5);
+    }
+    SDL_Rect destination = {(output_width - draw_width) / 2, (output_height - draw_height) / 2,
+                            draw_width, draw_height};
+    snesrecomp_sdl_render_texture(renderer, texture, &source, &destination);
     SDL_RenderPresent(renderer);
     pace_frame(&next_frame_counter, frame_counters);
     if (auto_close_frames > 0 && frames >= auto_close_frames) running = 0;

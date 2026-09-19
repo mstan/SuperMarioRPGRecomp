@@ -197,28 +197,21 @@ analyzer as `--profile-manifest`, so interpreter entries that were cleanly
 observed by a real run get promoted to optional AOT roots on the next
 regeneration — see [Qualification](#qualification).
 
-## Adaptive widescreen
+## Custom field renderer (experimental)
 
-Adaptive view is an opt-in Mods-tab feature. Enable the built-in Widescreen
-mod from the launcher's Mods page to request a 398x224 (16:9) framebuffer and
-recognizes SMRPG's validated Mode-1 field contract without changing any
-guest PPU register. The host matches the complete 32x28 live viewport
-against the game's decompressed 128x128 field maps, then streams only
-authored tiles inside the assignment's horizontal mask and the
-viewport-connected component. The result is genuine, camera-responsive field
-geometry: a camera at one room edge may keep a black margin on that side
-while using the available width on the other. Packed maps with only the
-game's unlocked default bounds use connectivity filtering, so adjacent
-authored geometry can extend without exposing a neighboring room across an
-intervening void. Leave the Widescreen mod disabled for authentic 4:3 output.
+Enable **Super Mario RPG Custom Renderer** in Mods and choose **Fit to
+window**, **16:9**, or **21:9**. The host reveals additional horizontal
+scenery and actors while the guest PPU stays at 256x224. Menus, battles and
+unsupported scenes keep the native view. Special actor transforms, shadows
+and some effects remain incomplete in the added area.
 
-Menus and the battle arena remain native-width. With the Widescreen mod's HUD
-option set to `Split to edges` (the default), the captured battle HUD contract
-anchors Mario's BG2 HP panel and OAM slots 0-7 (portrait and command diamond)
-to the adaptive edge while leaving actors in authentic world coordinates. Set
-the mod option to `Authentic centered` for a centered-HUD parity comparison.
-For developer parity checks, `SNESRECOMP_WIDESCREEN=1` and
-`SNESRECOMP_WIDESCREEN_HUD=0` remain available as environment overrides.
+See [custom-renderer.md](docs/custom-renderer.md) for the architecture,
+current limits, validation, paired engine branch and build instructions.
+To try the isolated Windows build with Fit enabled on first use:
+
+```powershell
+./tools/run_custom_renderer.ps1
+```
 
 ## Trace builds / debug server
 
@@ -249,8 +242,8 @@ failed attract-soak thresholds. Useful environment variables:
 | `SNESRECOMP_FRAME_DUMP=frame.ppm` | Write the final frame as a PPM. |
 | `SNESRECOMP_WAV=attract.wav` | Capture rendered audio as a WAV. |
 | `SNESRECOMP_INPUT_SCRIPT` | Comma-separated `FIRST[-LAST]:MASK` spans for deterministic input (e.g. `900:0x8` taps Start). |
-| `SNESRECOMP_WIDESCREEN_EXTRA=71` | Force a 398-pixel adaptive framebuffer in headless captures. |
-| `SNESRECOMP_WIDESCREEN_HUD=0` | Compare the unanchored (centered) HUD policy. |
+| `SNESRECOMP_WIDESCREEN_EXTRA=214` | Force a 684-pixel custom framebuffer in headless captures. |
+| `SNESRECOMP_STATE_TRACE_FILE` | Write guest-memory hashes and clocks for renderer parity checks. |
 | `SNESRECOMP_TIER2_MANIFEST` | Override the final manifest path (default is a unique per-run `tier2_<game>_<UTC>_p<PID>.json`). |
 | `SNESRECOMP_TIER2_JOURNAL` | Override the append-only dispatch-miss journal path (default matches the per-run manifest with `.jsonl`). |
 
@@ -301,17 +294,9 @@ regenerated allowlist build repeated a 3,000-frame gate with 2,941 logic
 changes, 2,669 active-video frames, 1,860 video changes, and 2,420
 active-audio frames.
 
-TCP validation also exercised state slot 12 end to end: save a known WRAM
-position, inject controller input until it changes, then load and confirm
-the original bytes are restored. On the Bowser's Keep field, TCP captures
-show a 71-pixel adaptive budget, live asymmetric room space (`left=9`,
-`right=71` at the saved camera), zero shadow misses, and a seamless
-continuation across the native/right-margin tile boundary. A
-widescreen-off capture reports a zero budget and an exact 256x224
-framebuffer. A default-mask attract field also reports `left=71`,
-`right=71` with field-window expansion active; its 398x224 capture shows a
-coherent authored scene across the full viewport rather than a centered
-4:3 image.
+The earlier release's shadow-map widescreen checks are superseded by the
+custom renderer. Current visual and guest-state parity results are recorded
+in [custom-renderer.md](docs/custom-renderer.md#validation-and-capture-tools).
 
 At frame 599, the native picture best-matches the Snes9x reference at frame
 605 with 0.73 mean absolute RGB error. The corresponding audio envelopes

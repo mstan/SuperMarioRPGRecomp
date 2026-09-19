@@ -9,24 +9,22 @@
 #define SMRPG_WS_PLUGIN "super-mario-rpg.widescreen"
 
 static int g_smrpg_widescreen_enabled;
-static int g_smrpg_widescreen_hud_enabled;
+static int g_smrpg_aspect;
+
+int smrpg_widescreen_aspect(void) { return g_smrpg_aspect; }
 
 int smrpg_widescreen_enabled(void) {
   return g_smrpg_widescreen_enabled != 0;
 }
 
-int smrpg_widescreen_hud_enabled(void) {
-  return g_smrpg_widescreen_hud_enabled != 0;
-}
-
 static void smrpg_widescreen_reset(void) {
   g_smrpg_widescreen_enabled = 0;
-  g_smrpg_widescreen_hud_enabled = 0;
+  g_smrpg_aspect = 0;
 }
 
 static void smrpg_widescreen_activate(void) {
   g_smrpg_widescreen_enabled = 1;
-  g_smrpg_widescreen_hud_enabled = 1;
+  g_smrpg_aspect = 0;
 
   const RecompLauncherCModProvider *provider =
       snes_mod_runtime_launcher_provider_c();
@@ -40,10 +38,9 @@ static void smrpg_widescreen_activate(void) {
                                       SMRPG_WS_FEATURE, i, &option)) {
       break;
     }
-    if (strcmp(option.id, "hud") == 0) {
-      g_smrpg_widescreen_hud_enabled =
-          strcmp(option.value, "authentic") != 0;
-    }
+    if (strcmp(option.id, "aspect") == 0)
+      g_smrpg_aspect = strcmp(option.value, "16:9") == 0 ? 1 :
+                      strcmp(option.value, "21:9") == 0 ? 2 : 0;
   }
 }
 

@@ -1,4 +1,5 @@
 #include "smrpg_runtime.h"
+#include "smrpg_renderer.h"
 
 #include "audio_trace.h"
 #include "common_rtl.h"
@@ -233,6 +234,27 @@ static int trace_wram(uint64_t frame) {
   if (frame % 30u == 0) fflush(stream);
   return ferror(stream) == 0;
 }
+static int trace_state(uint64_t frame) {
+  static FILE *stream;
+  static int initialized;
+  if (!initialized) {
+    initialized = 1;
+    const char *path = getenv("SNESRECOMP_STATE_TRACE_FILE");
+    if (path && *path) { stream = fopen(path, "w"); if (!stream) return 0; }
+  }
+  if (!stream) return 1;
+  uint64_t hash = logic_hash();
+  const uint8_t *iram = sa1_cpu_memory_ptr(g_snes->cart->sa1, 0, 0x3000);
+  if (iram) hash = fnv1a_update(hash, iram, 0x800);
+  hash = fnv1a_update(hash, g_ppu->vram, sizeof(g_ppu->vram));
+  hash = fnv1a_update(hash, g_ppu->cgram, sizeof(g_ppu->cgram));
+  hash = fnv1a_update(hash, g_ppu->oam, sizeof(g_ppu->oam));
+  hash = fnv1a_update(hash, g_ppu->highOam, sizeof(g_ppu->highOam));
+  fprintf(stream, "%llu %016llx %llu %llu\n", (unsigned long long)frame,
+      (unsigned long long)hash, (unsigned long long)g_cpu.master_cycles,
+      (unsigned long long)sa1_instructions_executed(g_snes->cart->sa1));
+  return fflush(stream) == 0;
+}
 
 static void collect_video(AttractStats *stats, const uint8_t *pixels,
                           long frame, int width) {
@@ -363,12 +385,10 @@ int main(int argc, char **argv) {
   if (wide_value && wide_value[0])
     widescreen_extra = (int)strtol(wide_value, NULL, 0);
   SmrpgSetWidescreenExtra(widescreen_extra);
-  const char *hud_value = getenv("SNESRECOMP_WIDESCREEN_HUD");
-  if (hud_value && hud_value[0])
-    SmrpgSetWidescreenHud(strtol(hud_value, NULL, 0) != 0);
+  SmrpgSetCustomRendererEnabled(widescreen_extra > 0);
   int frame_width = SmrpgWidescreenWidth();
 
-  static uint8_t pixels[kPpuBufWidth * 224u * 4u];
+  static uint8_t pixels[kSmrpgRenderWidth * 224u * 4u];
   int16_t audio[534 * 2];
   SmrpgBeginDrawing(pixels, (size_t)frame_width * 4u);
   AttractStats stats = {0};
@@ -411,6 +431,10 @@ int main(int argc, char **argv) {
     }
 
     SmrpgDrawPpuFrame();
+    if (!trace_state((uint64_t)frame)) {
+      fputs("unable to write guest-state trace\n", stderr);
+      wav_close(&wav); free(rom); return 6;
+    }
     collect_video(&stats, pixels, frame, frame_width);
     if (!maybe_write_raw_frame(frame, pixels, frame_width)) {
       fputs("unable to write raw frame capture\n", stderr);
