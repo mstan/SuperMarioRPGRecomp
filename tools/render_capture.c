@@ -29,9 +29,9 @@ int main(int argc, char **argv) {
   SmrpgRendererStats s = SmrpgRendererGetStats();
   printf("{\"width\":%d,\"area\":%d,\"camera\":[%d,%d],\"match\":%u,"
          "\"signal\":%u,\"field_lines\":%u,\"margin_pixels\":%u,"
-         "\"actors\":%u,\"actor_pixels\":%u}\n",
+         "\"actors\":%u,\"actor_pixels\":%u,\"battle_lines\":%u}\n",
          width, s.area, s.camera_x, s.camera_y, s.match, s.signal,
-         s.field_lines, s.margin_pixels, s.actors, s.actor_pixels);
+         s.field_lines, s.margin_pixels, s.actors, s.actor_pixels, s.battle_lines);
   free(bytes); free(pixels);
   return ok ? 0 : 4;
 }

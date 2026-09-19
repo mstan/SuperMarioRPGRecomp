@@ -23,11 +23,11 @@ static SmrpgRendererStats stats;
 static Ppu raster;
 enum { kMapStride = 256, kMapCells = 256 * 256 };
 static uint8_t connected[kMapCells];
-static uint16_t tiles[2][kMapCells];
+static uint16_t tiles[3][kMapCells];
 static int map_width, map_height;
 static int last_x = -1, last_y = -1, last_area = -1;
 typedef struct MapView { int x, y, area; unsigned scroll_x, scroll_y; bool valid; } MapView;
-static MapView views[2];
+static MapView views[3];
 static const uint8_t *rom_data;
 static size_t rom_size;
 static uint8_t actor_bwram[0x8000], actor_iram[0x800];
@@ -167,12 +167,13 @@ static void expand_map(void) {
   map_width = columns * 2;
   map_height = 8192 / columns;
   memset(tiles, 0, sizeof(tiles));
-  for (unsigned l = 0; l < 2; ++l) {
-    unsigned map = l ? 0x12000 : 0x10000;
-    unsigned set = l ? 0x16000 : 0x15000;
+  for (unsigned l = 0; l < 3; ++l) {
+    unsigned map = 0x10000 + l * 0x2000;
+    unsigned set = 0x15000 + l * 0x1000;
     for (int y = 0; y < map_height; ++y)
       for (int x = 0; x < map_width; ++x) {
-        unsigned block = read16(frame.ram, map + ((y / 2) * columns + x / 2) * 2) & 511;
+        unsigned cell = (y / 2) * columns + x / 2;
+        unsigned block = l == 2 ? frame.ram[map + cell] : read16(frame.ram, map + cell * 2) & 511;
         tiles[l][y * kMapStride + x] = read16(frame.ram,
             set + block * 8 + (y & 1) * 4 + (x & 1) * 2);
       }
@@ -258,6 +259,9 @@ static bool solve_map(const RasterLine *l, const Ppu *p) {
   last_x = v->x; last_y = v->y; last_area = v->area;
   stats.camera_x = last_x * 8 + (v->scroll_x & 7);
   stats.camera_y = last_y * 8 + (v->scroll_y & 7);
+  if (p->screenEnabled[0] & 4) {
+    if (PPU_bigTiles(p, 2) || !solve_layer(l, p, 2)) return false;
+  } else views[2].valid = false;
   return true;
 }
 
@@ -310,10 +314,15 @@ static unsigned background(const RasterLine *l, const Ppu *p, unsigned layer, in
   if (tile & 0x4000) tx = 7 - tx;
   if (tile & 0x8000) ty = 7 - ty;
   unsigned base = ((p->bgTileAdr >> (layer * 4)) & 15) * 4096;
-  unsigned pixel = tile_pixel(l->vram, base + (tile & 1023) * 16, tx, ty);
+  unsigned pixel;
+  if (layer == 2) {
+    unsigned bits = l->vram[(base + (tile & 1023) * 8 + ty) & 32767] >> (7 - tx);
+    pixel = (bits & 1) | ((bits >> 7) & 2);
+  } else pixel = tile_pixel(l->vram, base + (tile & 1023) * 16, tx, ty);
   if (!pixel) return 0;
-  unsigned priority = (tile & 0x2000 ? 12 : 8) - layer;
-  return (priority << 12) | (layer << 8) | ((tile >> 10) & 7) * 16 | pixel;
+  unsigned priority = layer == 2 ? (tile & 0x2000 ? ((p->bgmode & 8) ? 15 : 3) : 1) :
+                      (tile & 0x2000 ? 12 : 8) - layer;
+  return (priority << 12) | (layer << 8) | ((tile >> 10) & 7) * (layer == 2 ? 4 : 16) | pixel;
 }
 static unsigned subscreen_pattern(const RasterLine *l, const Ppu *p, int x, int y) {
   /* Field BG3 on the subscreen is a repeating effect plane (water/snow),
@@ -377,6 +386,56 @@ static uint32_t color(const RasterLine *l, const Ppu *p, unsigned main, unsigned
     result |= (uint32_t)c << (16 - component * 8);
   }
   return result;
+}
+
+static bool battle_line(const Ppu *p) {
+  /* Retail battle BG1 is a finite 64x32-tile arena uploaded from $7E7000.
+   * BG2/BG3 and OBJ contain menus, portraits and combatants; keep those
+   * native. Do not mistake the 32x64 title artwork for a wider arena. */
+  return (p->bgmode & 7) == 1 && !(p->inidisp & 128) &&
+         !PPU_bigTiles(p, 0) && p->bgXsc[0] == 0x41 &&
+         p->bgXsc[1] == 0x48 && p->bgXsc[2] == 0x58 &&
+         p->bgTileAdr == 0x530 && (p->screenEnabled[0] & 0x11) == 0x11;
+}
+
+static unsigned battle_background(const RasterLine *l, const Ppu *p, int x, int y) {
+  int camera_x = p->hScroll[0] & 511;
+  if (camera_x > 256) camera_x -= 512; /* small negative camera shake */
+  int wx = camera_x + x, wy = (p->vScroll[0] + y) & 255;
+  if (wx < 0 || wx >= 512) return 0;
+  unsigned address = 0x4000 + (wy / 8) * 32 + (wx / 8 & 31) + (wx >= 256 ? 1024 : 0);
+  unsigned tile = l->vram[address], tx = wx & 7, ty = wy & 7;
+  /* The decompressed arena pads unassigned cells with zero. CHR tile 0
+   * can still contain graphics (e.g. the mountain and lava arenas). */
+  if (!tile) return 0;
+  if (tile & 0x4000) tx = 7 - tx;
+  if (tile & 0x8000) ty = 7 - ty;
+  unsigned pixel = tile_pixel(l->vram, (tile & 1023) * 16, tx, ty);
+  /* A zero pixel is unpainted map space, not permission to extend the
+   * backdrop color or wrap the arena into another copy of itself. */
+  return pixel ? ((tile & 0x2000 ? 12 : 8) << 12) | ((tile >> 10) & 7) * 16 | pixel : 0;
+}
+
+static void draw_battle_margins(uint8_t *out, size_t pitch, int width) {
+  int extra = (width - 256) / 2;
+  for (int y = 0; y < 224; ++y) {
+    const RasterLine *l = &frame.lines[y];
+    memcpy(&raster, l->registers, PPU_SAVESTATE_REGS_SIZE);
+    if (!battle_line(&raster)) continue;
+    ++stats.battle_lines;
+    uint32_t *row = (uint32_t *)(out + y * pitch);
+    for (int sx = 0; sx < width; ++sx) {
+      int x = sx - extra;
+      if (x >= 0 && x < 256) continue;
+      if ((raster.screenWindowed[0] & 1) && window(&raster, 0, x)) continue;
+      unsigned bg = battle_background(l, &raster, x, y + 1);
+      if (!bg) continue;
+      unsigned sub = raster.screenEnabled[1] & 1 ? bg : 0x500;
+      if ((raster.screenWindowed[1] & 1) && window(&raster, 0, x)) sub = 0x500;
+      row[sx] = color(l, &raster, bg, sub, x);
+      if (row[sx]) ++stats.margin_pixels;
+    }
+  }
 }
 
 static const uint8_t *rom_bytes(unsigned address, size_t size) {
@@ -542,7 +601,11 @@ void SmrpgRendererDraw(uint8_t *out, size_t pitch, int width) {
     memcpy(&raster, frame.lines[y].registers, PPU_SAVESTATE_REGS_SIZE);
     if (reference < 0 && field_line(&raster) && !(raster.inidisp & 128)) reference = y;
   }
-  if (!extra || reference < 0) return;
+  if (!extra) return;
+  if (reference < 0) {
+    draw_battle_margins(out, pitch, width);
+    return;
+  }
   const RasterLine *ref = &frame.lines[reference];
   memcpy(&raster, ref->registers, PPU_SAVESTATE_REGS_SIZE);
   expand_map();
@@ -560,11 +623,12 @@ void SmrpgRendererDraw(uint8_t *out, size_t pitch, int width) {
       int x = sx - extra;
       bool aperture = raster.window1left == 8 && raster.window1right == 247;
       if (x >= (aperture ? 8 : 0) && x < (aperture ? 248 : 256) && !diagnostic_full) continue;
-      unsigned bg[2] = {background(l, &raster, 0, x, y + 1), background(l, &raster, 1, x, y + 1)};
+      unsigned bg[3] = {background(l, &raster, 0, x, y + 1), background(l, &raster, 1, x, y + 1),
+                        background(l, &raster, 2, x, y + 1)};
       unsigned screens[2] = {0x500, 0x500};
       for (unsigned sub = 0; sub < 2; ++sub)
       {
-        for (unsigned layer = 0; layer < 2; ++layer) {
+        for (unsigned layer = 0; layer < 3; ++layer) {
           unsigned bit = 1u << layer;
           if (!(raster.screenEnabled[sub] & bit) ||
               ((raster.screenWindowed[sub] & bit) && window(&raster, layer, x))) continue;

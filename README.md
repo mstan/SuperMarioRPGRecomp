@@ -201,9 +201,11 @@ regeneration — see [Qualification](#qualification).
 
 Enable **Super Mario RPG Custom Renderer** in Mods and choose **Fit to
 window**, **16:9**, or **21:9**. The host reveals additional horizontal
-scenery and actors while the guest PPU stays at 256x224. Menus, battles and
+scenery and actors while the guest PPU stays at 256x224. Standard battle
+backgrounds reveal only existing artwork beyond the native view; the
+castle arena has eight extra pixels per side. Menus, the title and
 unsupported scenes keep the native view. Special actor transforms, shadows
-and some effects remain incomplete in the added area.
+and some effects remain incomplete in the added field area.
 
 See [custom-renderer.md](docs/custom-renderer.md) for the architecture,
 current limits, validation, paired engine branch and build instructions.

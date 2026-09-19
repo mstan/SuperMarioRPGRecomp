@@ -15,7 +15,7 @@ rom_sha256 = "740646f3535bfb365ca44e70d46ab433467b142bd84010393070bd0b141af853"
 [[feature]]
 id = "widescreen"
 name = "Custom field renderer (experimental)"
-description = "Reveal more of the current map. Menus, battles and unsupported scenes retain the native view. Some actor effects remain incomplete."
+description = "Reveal more of the current map and any existing battle backdrop borders. Menus, title and unsupported scenes retain the native view. Some actor effects remain incomplete."
 group = "Display"
 default_enabled = false
 

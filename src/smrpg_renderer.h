@@ -4,7 +4,7 @@
 
 enum { kSmrpgRenderWidth = 1024, kSmrpgRenderHeight = 224 };
 typedef struct SmrpgRendererStats {
-  unsigned field_lines, margin_pixels, actors, actor_pixels;
+  unsigned field_lines, margin_pixels, actors, actor_pixels, battle_lines;
   int camera_x, camera_y, area;
   unsigned match, signal;
 } SmrpgRendererStats;

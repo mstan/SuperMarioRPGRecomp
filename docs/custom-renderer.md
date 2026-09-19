@@ -5,12 +5,13 @@ window**, **16:9**, or **21:9**. Fit reveals additional horizontal map area as
 the window grows. It keeps the native 224-line height and 7:6 pixel aspect;
 it does not zoom out vertically to fit an entire level. The logical width is
 256–1024 pixels, approximately 4:3 through 16:3. Narrow windows and fixed
-ratios use letterboxing. Menus, battles, and unrecognized field contracts
-stay centered at native size.
+ratios use letterboxing. Standard battle backgrounds expose any authored
+horizontal borders. Menus, the title and unrecognized scene contracts stay
+centered at native size.
 
 The package remains opt-in. Its existing package/feature IDs are retained
 so saved enable/disable selections continue to work. The former split-HUD
-option has been removed; UI and battle rendering retain native placement.
+option has been removed; UI and battle combatants retain native placement.
 
 ## Try the prepared Windows build
 
@@ -65,14 +66,25 @@ anchors are removed. The host copies the native raster plus each scanline's
 registers, VRAM, palette and OAM. Window changes and paused redraws consume
 that immutable frame without running guest logic again.
 
-The compositor reads decompressed BG1/BG2 metatiles from WRAM, handles the
+The compositor reads decompressed BG1/BG2/BG3 metatiles from WRAM, handles the
 32/64/128-column assignment layouts, and matches them against the current
 native tilemaps to recover each layer's camera. It follows connected room
-geometry without the old ten-tile extension limit. Repeating map axes wrap
-using the game's bounds; the BG3 subscreen effect plane supplies water and
-similar color-math effects. Native HDMA apertures, brightness and palette
-changes are applied per line. Low-confidence map matches fall back to the
-native image.
+geometry without the old ten-tile extension limit. BG3 assignments use
+one-byte metatile IDs and 2bpp graphics; the main-screen layer supplies
+Bowser's Keep's red-cloud sky. Repeating map axes wrap using the game's
+bounds; the BG3 subscreen effect plane supplies water and similar color-math
+effects. Native HDMA apertures, brightness and palette changes are applied
+per line. Low-confidence map matches fall back to the native image.
+
+Standard battles use a separate finite BG1 tilemap, uploaded to VRAM
+`$4000`. The renderer samples existing background pixels outside the native
+256-pixel view without wrapping or extending blank map space. The castle
+arena contains only 272 pixels of artwork, with eight hidden pixels on each
+side of the native camera. Its remaining margins stay black. Other layouts
+are expanded only when they match the supported battle register contract.
+HUD, menus and combatants remain in the untouched native image. The title's
+BG1/BG2 maps are 256 pixels wide and 512 tall; there is no extra horizontal
+title artwork to expose.
 
 At retail US `$C0:AAF3`, a read-only SA-1 observer copies each actor's pose
 before the native culler. At `$C0:6E5F`, it associates those poses with the
@@ -133,6 +145,22 @@ save/load runs. These checks demonstrate renderer parity, not a passing
 audio qualification gate; the existing audio issue is tracked separately.
 Remaining sprite/effect coverage is tracked in `beads-4c5.5`.
 
+The castle/title/battle follow-up (`beads-4c5.6`) additionally checks BG3
+byte-index assignments, 2bpp sky composition, finite battle borders and
+zero-entry padding even when CHR tile 0 contains opaque graphics. Replaying
+the same 30 attract captures plus the castle exterior and first castle
+battle preserved every native interior pixel. Existing field/title outputs
+were unchanged; supported battle captures gained only their authored
+borders. The castle battle gained exactly eight pixels per side. Artifacts
+are under `build-custom/qa-scene-expansion`.
+
+Two 900-frame runs from the castle entrance through the first battle, at
+widths 256 and 684, passed the headless harness with identical guest-state
+traces and audio counters, and zero audio underruns. The trace SHA-256 is
+`2b3f82d5c3e55fc36c215e851ab5f5a99e9cc52d1f924967400f6cc7cfb0afb1`.
+Both logged the same 115 existing APU frame-boundary sync timeouts after
+state restore; renderer parity does not resolve that audio timing issue.
+
 Useful environment variables:
 
 | Variable | Purpose |
@@ -152,7 +180,7 @@ Replay a capture without executing the guest:
 ./build-custom/smrpg_render_capture.exe smrpg.sfc frame.srpg preview.ppm 684
 ```
 
-The tool prints camera, map-match, field-line and offscreen-actor statistics.
+The tool prints camera, map-match, field/battle-line and offscreen-actor statistics.
 The ROM, generated code, captures, saves and screenshots remain ignored.
 
 The architecture follows the sibling F-Zero, Mega Man X and Super Metroid
