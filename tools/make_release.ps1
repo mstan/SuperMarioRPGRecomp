@@ -40,7 +40,7 @@ $build = Join-Path $root $BuildDir
 $exeName = 'SuperMarioRPGSNESRecomp.exe'
 $exe = Join-Path $build $exeName
 $assets = Join-Path $build 'assets'
-$mods = Join-Path $build 'mods'
+$modPackages = Join-Path $build 'mods/preloaded/packages'
 
 if (-not (Test-Path -LiteralPath $exe)) {
   throw "Release executable missing: $exe"
@@ -86,13 +86,16 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
 Copy-Item -LiteralPath $exe -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination $stage
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $stage
 Copy-Item -LiteralPath $assets -Destination $stage -Recurse
-# Release-owned mod catalog, when the build stages one. Ships as a nested
-# directory tree, which is exactly what made portable ZIP entry names matter
-# (see the archive writer below).
-if (Test-Path -LiteralPath $mods) {
-  Copy-Item -LiteralPath $mods -Destination $stage -Recurse
+# Package only release-owned manifests. A developer's saved enabled mods
+# must never become release defaults or overwrite a player's selections.
+if (-not (Test-Path -LiteralPath $modPackages -PathType Container)) {
+  throw "Release mod catalog missing: $modPackages"
 }
+$stageMods = Join-Path $stage 'mods/preloaded'
+New-Item -ItemType Directory -Path $stageMods -Force | Out-Null
+Copy-Item -LiteralPath $modPackages -Destination $stageMods -Recurse
 
 # keybinds.ini is auto-generated next to the exe on first run (regenerated if
 # deleted); ship whatever is currently sitting next to the built exe, if any.

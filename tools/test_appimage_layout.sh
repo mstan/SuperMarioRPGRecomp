@@ -87,7 +87,12 @@ if [ -n "$has_config" ]; then
 fi
 mkdir -p "$state1/mods/packages/user.thirdparty.example/1.0.0"
 printf 'user-owned\n' > "$state1/mods/packages/user.thirdparty.example/1.0.0/manifest.toml"
+mkdir -p "$state1/mods/preloaded"
+printf 'format_version = 1\n# user-owned mod choices\n' > "$state1/mods/preloaded/state.toml"
+mod_state_before=$(cat "$state1/mods/preloaded/state.toml")
 run_apprun "$state1/SuperMarioRPG.AppImage"
+test "$(cat "$state1/mods/preloaded/state.toml")" = "$mod_state_before" || {
+    echo "FAIL: saved mod choices clobbered by relaunch" >&2; exit 1; }
 if [ -n "$has_config" ]; then
     test "$(cat "$state1/config.ini")" = "$cfg_before" || {
         echo "FAIL: user config.ini edit clobbered by relaunch" >&2; exit 1; }
@@ -129,7 +134,7 @@ test "$(head -n1 "$state3/rom.cfg")" = "$state3/other.sfc" || {
 $(head -n1 "$state3/rom.cfg")" >&2; exit 1; }
 
 # 4. The read-only payload stayed pristine: no state files anywhere in AppDir.
-for leak in config.ini keybinds.ini rom.cfg saves tier2_coverage.json last_run_report.json; do
+for leak in config.ini keybinds.ini rom.cfg saves state.toml tier2_coverage.json last_run_report.json; do
     found=$(find "$appdir" -name "$leak" | grep -v '^$' || true)
     [ -z "$found" ] || { echo "FAIL: state leaked into the payload: $found" >&2; exit 1; }
 done

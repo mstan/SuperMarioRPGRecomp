@@ -200,7 +200,7 @@ regeneration — see [Qualification](#qualification).
 ## Custom field renderer (experimental)
 
 The original renderer at **4:3** is the default. To opt in, enable
-**Widescreen (custom renderer)** in Mods and choose **Fit to window**,
+**Widescreen (Experimental)** in Mods and choose **Fit to window**,
 **16:9**, or **21:9**. Disabling the mod restores the original renderer.
 The custom renderer reveals additional horizontal scenery and actors while
 the guest PPU stays at 256x224. Standard battle

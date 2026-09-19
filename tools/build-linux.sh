@@ -60,22 +60,23 @@ REGEN_CMD="bash tools/regen.sh --no-tests"
 PREBUILD_CMD=""
 POSTBUILD_CMD=""
 BOXART="recomp/launcher/boxart.tga"          # AppImage icon source (optional)
-EXTRA_PAYLOAD=()                             # repo-relative files -> usr/bin/
+EXTRA_PAYLOAD=(LICENSE README.md)            # repo-relative files -> usr/bin/
 # Release-owned mod catalog: these manifests must be staged beside the ELF so
 # the AppImage can seed/refresh them beside the user's AppImage at launch.
 REQUIRED_MOD_MANIFESTS=(
-  "packages/super-mario-rpg.diagnostics.coverage-proof/1.0.0/manifest.toml"
-  "packages/super-mario-rpg.enhancement.widescreen/1.0.0/manifest.toml"
+  "preloaded/packages/super-mario-rpg.diagnostics.coverage-proof/1.0.0/manifest.toml"
+  "preloaded/packages/super-mario-rpg.enhancement.widescreen/1.0.0/manifest.toml"
 )
 PROD_CMAKE_FLAGS=( -DSNESRECOMP_ENABLE_TRACE=OFF )
 DEBUG_CMAKE_FLAGS=( -DSNESRECOMP_ENABLE_TRACE=ON )
 # ============================================================================
 
-# Pinned AppImage tooling (same pins as the Mega Man X / Tomba Linux releases).
-LINUXDEPLOY_URL=https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-LINUXDEPLOY_SHA=421ca71d5c69ea97c6309276232990d43df1dcece0edfaa26bbf926ff96ed12e
-APPIMAGETOOL_URL=https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-APPIMAGETOOL_SHA=a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0
+# Tagged upstream releases; hashes verified against GitHub release asset
+# digests. Mutable continuous URLs can invalidate an otherwise pinned build.
+LINUXDEPLOY_URL=https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+LINUXDEPLOY_SHA=c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+APPIMAGETOOL_URL=https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+APPIMAGETOOL_SHA=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
 
 CONFIG="prod"
 DO_REGEN=0
@@ -265,10 +266,10 @@ for manifest in "${REQUIRED_MOD_MANIFESTS[@]}"; do
     exit 1
   }
 done
-if [ -d "$BUILT_MODS" ]; then
-  echo "      staging mod catalog   -> AppDir/usr/bin/mods"
-  cp -r "$BUILT_MODS" "$APPDIR/usr/bin/mods"
-fi
+# Never distribute a build directory's saved mod state. The package defaults
+# own first launch; the player's enabled/disabled selections survive updates.
+mkdir -p "$APPDIR/usr/bin/mods/preloaded"
+cp -r "$BUILT_MODS/preloaded/packages" "$APPDIR/usr/bin/mods/preloaded/packages"
 
 # Custom AppRun. State policy: everything user-visible lives NEXT TO the
 # .AppImage, exactly like the Windows zip keeps it next to the exe. The engine

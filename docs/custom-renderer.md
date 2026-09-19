@@ -1,7 +1,7 @@
 # Experimental custom field renderer
 
 The default is the original PPU renderer at **4:3**. Enable
-**Widescreen (custom renderer)** in Mods, then choose **Fit to window**,
+**Widescreen (Experimental)** in Mods, then choose **Fit to window**,
 **16:9**, or **21:9** to opt in. Disabling the mod restores the original
 renderer, with no custom composition or actor observation in normal play.
 Fit reveals additional horizontal map area as the window grows. It keeps
@@ -41,12 +41,12 @@ ROM. To skip the launcher and use the saved mod selection:
 launching. `-RuntimeBin` selects the MinGW runtime DLL directory. The helper
 writes `stdout.log` and `stderr.log` inside the playtest directory.
 
-This work uses paired branches `codex/smrpg-custom-renderer` and
-`codex/smrpg-custom-renderer-engine`. They started from game `b722c0b` and
-engine `b04d8fa`. The launcher is updated to `e0ae4bc` for the current mod
-provider ABI. The engine adds the read-only SA-1 instruction observer needed
-for frame-correct actor snapshots. Use the paired engine checkout when
-building this local branch; these changes have not been merged or published.
+This work was developed on paired branches `codex/smrpg-custom-renderer`
+and `codex/smrpg-custom-renderer-engine`, starting from game `b722c0b` and
+engine `b04d8fa`. Release v0.0.4 pins launcher `e0ae4bc` and engine `fda93d2`.
+The engine adds the read-only SA-1 instruction observer needed for
+frame-correct actor snapshots. A recursive release checkout includes the
+required dependencies; the commands below use the paired development checkout.
 
 ```powershell
 $env:PATH = 'C:/msys64/mingw64/bin;' + $env:PATH
