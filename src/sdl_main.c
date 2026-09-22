@@ -10,6 +10,7 @@
 #include "launcher_profile.h"
 #include "mod_runtime.h"
 #include "recomp_launcher.h"
+#include "host_args.h"
 #include "sha256.h"
 #include "snes/cart.h"
 #include "snes/interp_bridge.h"
@@ -631,6 +632,25 @@ int main(int argc, char **argv) {
   }
   char rom_path[1024] = {0};
   RecompLauncherCSettings launcher_settings;
+  /* The command line is engine-owned; see snesrecomp/runner/src/host_args.h.
+   * This host knew no flags at all and read the ROM straight out of argv[1],
+   * so `--no-launcher` was taken to BE the ROM path and the game refused to
+   * start with "a verified ROM is required: --no-launcher". The resolver below
+   * still receives the ROM as argv[1]; only the parsing moved. */
+  const char *program_path = (argc >= 1) ? argv[0] : NULL;
+  SnesrecompHostArgs host_args;
+  if (!snesrecomp_host_args_parse(&argc, &argv, &host_args)) return 2;
+  if (host_args.help) {
+    snesrecomp_host_args_usage(program_path, NULL);
+    return 0;
+  }
+  if (!snesrecomp_host_args_reject_unknown(argc, argv, program_path, NULL))
+    return 2;
+  static char *rom_argv[2];
+  rom_argv[0] = (char *)(program_path ? program_path : "");
+  rom_argv[1] = (char *)(host_args.rom ? host_args.rom : NULL);
+  argv = rom_argv;
+  argc = host_args.rom ? 2 : 1;
   int resolve_result =
       resolve_rom(argc, argv, rom_path, sizeof(rom_path), &launcher_settings);
   if (resolve_result <= 0) return resolve_result == 0 ? 0 : 2;
