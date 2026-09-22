@@ -6,6 +6,9 @@ set(SNESRECOMP_ROOT "${CMAKE_SOURCE_DIR}/snesrecomp" CACHE PATH
     "Path to the SA-1-capable snesrecomp checkout (./snesrecomp submodule)")
 set(SNESRECOMP_SDL_BACKEND "SDL3" CACHE STRING
     "Desktop SDL backend")
+option(SNESRECOMP_ENABLE_BENCHMARK_PHASES
+    "Enable inclusive aggregate phase timing in finite benchmark output"
+    OFF)
 include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 
 # The SHARED recomp-ui launcher, consumed as the ./recomp-ui submodule like
@@ -14,6 +17,12 @@ include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 set(RECOMP_UI_ROOT "${CMAKE_SOURCE_DIR}/recomp-ui" CACHE PATH
     "Path to the shared recomp-ui checkout")
 include(${RECOMP_UI_ROOT}/recomp_ui.cmake)
+
+set(SNESRECOMP_BENCHMARK_HELPER_AVAILABLE OFF)
+if(EXISTS "${SNESRECOMP_ROOT}/runner/src/benchmark.c" AND
+   EXISTS "${SNESRECOMP_ROOT}/runner/src/benchmark.h")
+    set(SNESRECOMP_BENCHMARK_HELPER_AVAILABLE ON)
+endif()
 
 # Release version stamp: configure with -DSNESRECOMP_BUILD_VERSION=<ver>.
 # Unset (local builds) the define is omitted and the host defaults to "dev".
@@ -84,6 +93,16 @@ endfunction()
 
 configure_smrpg_target(SuperMarioRPGSNESRecompHeadless)
 configure_smrpg_target(SuperMarioRPGSNESRecomp)
+if(SNESRECOMP_BENCHMARK_HELPER_AVAILABLE)
+    target_sources(SuperMarioRPGSNESRecompHeadless PRIVATE
+        "${SNESRECOMP_ROOT}/runner/src/benchmark.c")
+    set_property(SOURCE "${SNESRECOMP_ROOT}/runner/src/benchmark.c"
+        APPEND PROPERTY COMPILE_DEFINITIONS
+        SNESRECOMP_BENCHMARK_PHASES=$<AND:$<BOOL:${SNESRECOMP_BENCHMARK_HELPER_AVAILABLE}>,$<BOOL:${SNESRECOMP_ENABLE_BENCHMARK_PHASES}>>)
+endif()
+set_property(SOURCE src/headless_main.c APPEND PROPERTY COMPILE_DEFINITIONS
+    SNESRECOMP_HAS_BENCHMARK_HELPER=$<BOOL:${SNESRECOMP_BENCHMARK_HELPER_AVAILABLE}>
+    SNESRECOMP_BENCHMARK_PHASES=$<AND:$<BOOL:${SNESRECOMP_BENCHMARK_HELPER_AVAILABLE}>,$<BOOL:${SNESRECOMP_ENABLE_BENCHMARK_PHASES}>>)
 # Hosts include "desktop/sdl_compat.h" rather than <SDL.h> so both majors build.
 snesrecomp_target_sdl(SuperMarioRPGSNESRecomp)
 recomp_target_launcher_ui(SuperMarioRPGSNESRecomp CONSOLE snes)

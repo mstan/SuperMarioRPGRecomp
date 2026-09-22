@@ -16,6 +16,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef SNESRECOMP_HAS_BENCHMARK_HELPER
+#define SNESRECOMP_HAS_BENCHMARK_HELPER 0
+#endif
+
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+#include "benchmark.h"
+#endif
+
 static const uint8_t kSmrpgSha256[32] = {
     0x74, 0x06, 0x46, 0xf3, 0x53, 0x5b, 0xfb, 0x36,
     0x5c, 0xa4, 0x4e, 0x70, 0xd4, 0x6a, 0xb4, 0x33,
@@ -262,6 +270,86 @@ static void collect_audio(AttractStats *stats, const int16_t *audio,
   if (active) stats->audio_active_frames++;
 }
 
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+static void print_benchmark_json(const SnesRecompBenchmark *benchmark,
+                                 long frames, int qualified, int output_ok,
+                                 int frame_width,
+                                 const AttractStats *stats,
+                                 uint32_t audio_samples,
+                                 const AudioTraceStats *audio_stats,
+                                 uint64_t aot_hits, uint64_t interp_hits,
+                                 uint64_t interp_insns,
+                                 uint64_t interp_cycles,
+                                 uint64_t sa1_instructions) {
+  double seconds = SnesRecompBenchmarkElapsedSeconds(benchmark);
+  double fps = seconds > 0.0 ? (double)frames / seconds : 0.0;
+  fprintf(stdout,
+          "SNESRECOMP_BENCHMARK {"
+          "\"game\":\"smrpg\","
+          "\"frames\":%ld,"
+          "\"seconds\":%.9f,"
+          "\"fps\":%.3f,",
+          frames, seconds, fps);
+  SnesRecompBenchmarkPrintPhaseJson(stdout, benchmark);
+  fprintf(stdout,
+          ",\"verified\":true,"
+          "\"qualified\":%s,"
+          "\"output_ok\":%s,"
+          "\"frame_width\":%d,"
+          "\"state\":{"
+          "\"resume\":\"%06x\","
+          "\"master_cycles\":%llu,"
+          "\"logic_hash\":\"%016llx\","
+          "\"logic_changes\":%llu"
+          "},"
+          "\"video\":{"
+          "\"hash\":\"%016llx\","
+          "\"active_frames\":%llu,"
+          "\"changes\":%llu"
+          "},"
+          "\"audio\":{"
+          "\"samples\":%u,"
+          "\"active_frames\":%llu,"
+          "\"peak\":%u,"
+          "\"underruns\":%llu,"
+          "\"produced\":%llu,"
+          "\"consumed\":%llu,"
+          "\"dropped\":%llu"
+          "},"
+          "\"dispatch\":{"
+          "\"aot_hits\":%llu,"
+          "\"interp_hits\":%llu"
+          "},"
+          "\"interpreter\":{"
+          "\"insns\":%llu,"
+          "\"cycles\":%llu"
+          "},"
+          "\"sa1\":{"
+          "\"instructions\":%llu"
+          "}"
+          "}\n",
+          qualified ? "true" : "false", output_ok ? "true" : "false",
+          frame_width, (unsigned)SmrpgResumePc(),
+          (unsigned long long)g_cpu.master_cycles,
+          (unsigned long long)stats->logic_hash,
+          (unsigned long long)stats->logic_changes,
+          (unsigned long long)stats->video_hash,
+          (unsigned long long)stats->video_active_frames,
+          (unsigned long long)stats->video_changes, audio_samples,
+          (unsigned long long)stats->audio_active_frames, stats->audio_peak,
+          (unsigned long long)stats->audio_underruns,
+          (unsigned long long)audio_stats->produced,
+          (unsigned long long)audio_stats->consumed,
+          (unsigned long long)audio_stats->dropped,
+          (unsigned long long)aot_hits,
+          (unsigned long long)interp_hits,
+          (unsigned long long)interp_insns,
+          (unsigned long long)interp_cycles,
+          (unsigned long long)sa1_instructions);
+  fflush(stdout);
+}
+#endif
+
 static int parse_input_script(InputSpan spans[kMaxInputSpans],
                               size_t *count_out) {
   const char *cursor = getenv("SNESRECOMP_INPUT_SCRIPT");
@@ -311,12 +399,32 @@ int main(int argc, char **argv) {
    * while stderr is redirected to a qualification log. */
   setvbuf(stderr, NULL, _IONBF, 0);
   headless_install_exception_filter();
-  if (argc < 2 || argc > 3) {
+  if (argc < 2) {
+    fprintf(stderr,
+            "usage: SuperMarioRPGSNESRecompHeadless <smrpg.sfc> [frames]\n"
+            "       SuperMarioRPGSNESRecompHeadless --benchmark <frames> "
+            "<smrpg.sfc>\n");
+    return 2;
+  }
+  const char *rom_path = argv[1];
+  long frame_limit = 36000;
+  if (!strcmp(argv[1], "--benchmark") ||
+      !strcmp(argv[1], "--benchmark-audio")) {
+    if (argc != 4) {
+      fprintf(stderr,
+              "usage: SuperMarioRPGSNESRecompHeadless --benchmark "
+              "<frames> <smrpg.sfc>\n");
+      return 2;
+    }
+    frame_limit = strtol(argv[2], NULL, 10);
+    rom_path = argv[3];
+  } else if (argc <= 3) {
+    frame_limit = argc == 3 ? strtol(argv[2], NULL, 10) : 36000;
+  } else {
     fprintf(stderr,
             "usage: SuperMarioRPGSNESRecompHeadless <smrpg.sfc> [frames]\n");
     return 2;
   }
-  long frame_limit = argc == 3 ? strtol(argv[2], NULL, 10) : 36000;
   if (frame_limit < 1 || frame_limit > 1000000) {
     fprintf(stderr, "frames must be between 1 and 1000000\n");
     return 2;
@@ -324,9 +432,9 @@ int main(int argc, char **argv) {
 
   size_t rom_size = 0;
   uint8_t rom_hash[32];
-  uint8_t *rom = read_rom(argv[1], &rom_size, rom_hash);
+  uint8_t *rom = read_rom(rom_path, &rom_size, rom_hash);
   if (!rom) {
-    fprintf(stderr, "unable to read ROM: %s\n", argv[1]);
+    fprintf(stderr, "unable to read ROM: %s\n", rom_path);
     return 2;
   }
   if (rom_size != 0x400000u ||
@@ -379,6 +487,10 @@ int main(int argc, char **argv) {
     return 4;
   }
   double audio_accumulator = 0.0;
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+  SnesRecompBenchmark benchmark;
+  SnesRecompBenchmarkBegin(&benchmark);
+#endif
   long save_state_frame = -1;
   long load_state_frame = -1;
   const char *state_value = getenv("SNESRECOMP_SAVE_STATE_FRAME");
@@ -389,7 +501,15 @@ int main(int argc, char **argv) {
     load_state_frame = strtol(state_value, NULL, 0);
 
   for (long frame = 0; frame < frame_limit; frame++) {
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+    uint64_t phase_start = SnesRecompBenchmarkPhaseBegin();
+#endif
     (void)RtlRunFrame(scripted_input(input_spans, input_span_count, frame));
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+    SnesRecompBenchmarkPhaseEnd(&benchmark,
+                                kSnesRecompBenchmarkPhase_GuestFrame,
+                                phase_start);
+#endif
     if (g_fail || !SmrpgLastLleResult()) {
       fprintf(stderr, "smrpg_native: runtime failure frame=%ld pc=$%06x\n",
               frame, (unsigned)SmrpgResumePc());
@@ -410,7 +530,15 @@ int main(int argc, char **argv) {
       return 6;
     }
 
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+    phase_start = SnesRecompBenchmarkPhaseBegin();
+#endif
     SmrpgDrawPpuFrame();
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+    SnesRecompBenchmarkPhaseEnd(&benchmark,
+                                kSnesRecompBenchmarkPhase_PpuDraw,
+                                phase_start);
+#endif
     collect_video(&stats, pixels, frame, frame_width);
     if (!maybe_write_raw_frame(frame, pixels, frame_width)) {
       fputs("unable to write raw frame capture\n", stderr);
@@ -423,7 +551,15 @@ int main(int argc, char **argv) {
     int audio_frames = (int)audio_accumulator;
     audio_accumulator -= audio_frames;
     memset(audio, 0, sizeof(audio));
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+    phase_start = SnesRecompBenchmarkPhaseBegin();
+#endif
     RtlRenderAudio(audio, audio_frames, 2);
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+    SnesRecompBenchmarkPhaseEnd(&benchmark,
+                                kSnesRecompBenchmarkPhase_AudioRender,
+                                phase_start);
+#endif
     collect_audio(&stats, audio, audio_frames);
     if (!wav_append(&wav, audio, audio_frames)) {
       fputs("unable to write WAV capture\n", stderr);
@@ -432,6 +568,9 @@ int main(int argc, char **argv) {
       return 7;
     }
   }
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+  SnesRecompBenchmarkEnd(&benchmark);
+#endif
 
   int output_ok = wav_close(&wav) &&
                   write_ppm(getenv("SNESRECOMP_FRAME_DUMP"), pixels,
@@ -474,6 +613,18 @@ int main(int argc, char **argv) {
           (unsigned long long)stats.video_changes, audio_samples,
           (unsigned long long)stats.audio_active_frames, stats.audio_peak,
           (unsigned long long)stats.audio_underruns);
+#if SNESRECOMP_HAS_BENCHMARK_HELPER
+  uint64_t aot_hits = 0;
+  uint64_t interp_hits = 0;
+  extern void cpu_dispatch_found_totals(uint64_t *, uint64_t *);
+  extern uint64_t interp816_insns_total(void);
+  extern uint64_t interp816_cycles_total(void);
+  cpu_dispatch_found_totals(&aot_hits, &interp_hits);
+  print_benchmark_json(&benchmark, frame_limit, qualified, output_ok,
+                       frame_width, &stats, audio_samples, &audio_stats,
+                       aot_hits, interp_hits, interp816_insns_total(),
+                       interp816_cycles_total(), sa1_instructions);
+#endif
   free(rom);
   return qualified && output_ok ? 0 : 8;
 }
