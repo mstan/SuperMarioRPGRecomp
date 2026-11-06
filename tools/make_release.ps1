@@ -87,6 +87,7 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 Copy-Item -LiteralPath $exe -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $stage
+Copy-Item -LiteralPath (Join-Path $root 'PERMISSIONS.md') -Destination $stage
 Copy-Item -LiteralPath $assets -Destination $stage -Recurse
 # Package only release-owned manifests. A developer's saved enabled mods
 # must never become release defaults or overwrite a player's selections.
