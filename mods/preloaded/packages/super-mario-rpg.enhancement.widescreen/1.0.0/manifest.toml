@@ -3,7 +3,7 @@ id = "super-mario-rpg.enhancement.widescreen"
 version = "1.0.0"
 name = "Super Mario RPG Widescreen (Experimental)"
 author = "mstan"
-description = "Experimental widescreen custom renderer. Disabled by default; normal play uses the original 4:3 renderer."
+description = "Experimental widescreen custom renderer, enabled with adaptive Fit for fresh settings. Existing saved choices remain respected."
 license = "MIT"
 resolver = "declarative"
 save_compatibility = "shared"
@@ -17,7 +17,7 @@ id = "widescreen"
 name = "Widescreen (Experimental)"
 description = "Enable the experimental custom renderer to reveal more of the map and existing battle backdrop borders. Disable for the original 4:3 renderer. Menus and title retain the native view. Some actor effects remain incomplete."
 group = "Display"
-default_enabled = false
+default_enabled = true
 
 [[option]]
 feature = "widescreen"

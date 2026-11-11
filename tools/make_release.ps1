@@ -30,13 +30,14 @@ Example:
 param(
   [Parameter(Mandatory = $true)][string]$Version,
   [string]$BuildDir = 'build-release',
+  [string]$OutputDir = 'release-stage',
   [string]$RuntimeBinDir = 'C:\msys64\mingw64\bin',
   [ValidateSet('SDL3', 'SDL2')][string]$SdlBackend = 'SDL3'
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $root $BuildDir
+$build = if ([IO.Path]::IsPathRooted($BuildDir)) { [IO.Path]::GetFullPath($BuildDir) } else { Join-Path $root $BuildDir }
 $exeName = 'SuperMarioRPGSNESRecomp.exe'
 $exe = Join-Path $build $exeName
 $assets = Join-Path $build 'assets'
@@ -62,7 +63,7 @@ if (-not $exeText.Contains($Version)) {
     'and rebuild before packaging.')
 }
 
-$out = Join-Path $root 'release-stage'
+$out = if ([IO.Path]::IsPathRooted($OutputDir)) { [IO.Path]::GetFullPath($OutputDir) } else { Join-Path $root $OutputDir }
 $stageBase = 'SuperMarioRPGSNESRecomp'
 $stageName = "$stageBase-windows-x64-v$Version"
 $stage = Join-Path $out $stageName
@@ -76,17 +77,19 @@ if (-not $stageFull.StartsWith($outFull, [StringComparison]::OrdinalIgnoreCase) 
   throw 'Refusing to clean release paths outside release-stage.'
 }
 
-if (Test-Path -LiteralPath $stage) {
-  Remove-Item -LiteralPath $stage -Recurse -Force
+if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)) {
+  throw 'Release output already exists; preserve it and choose a fresh staging location.'
 }
-if (Test-Path -LiteralPath $zip) {
-  Remove-Item -LiteralPath $zip -Force
-}
-New-Item -ItemType Directory -Path $stage -Force | Out-Null
+New-Item -ItemType Directory -Path $stage | Out-Null
 
 Copy-Item -LiteralPath $exe -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $stage
+Copy-Item -LiteralPath (Join-Path $root 'DIAGNOSTICS.md') -Destination $stage
+Copy-Item -LiteralPath (Join-Path $root 'RELEASE_NOTES_v0.0.6.md') -Destination $stage
+Get-ChildItem -LiteralPath (Join-Path $root 'tools/support') -File | ForEach-Object {
+  Copy-Item -LiteralPath $_.FullName -Destination $stage
+}
 Copy-Item -LiteralPath (Join-Path $root 'PERMISSIONS.md') -Destination $stage
 Copy-Item -LiteralPath $assets -Destination $stage -Recurse
 # Package only release-owned manifests. A developer's saved enabled mods
@@ -128,7 +131,13 @@ if (Test-Path -LiteralPath $cfg) {
 # fails the release rather than shipping. Builds that link the MinGW runtime
 # statically (SNESRECOMP_STATIC_RUNTIME, the default) correctly ship no
 # libgcc/libstdc++/libwinpthread at all.
-. (Join-Path $root 'snesrecomp\tools\release\RuntimeDllClosure.ps1')
+$framework = Join-Path $root 'snesrecomp'
+$cache = Join-Path $build 'CMakeCache.txt'
+if (Test-Path -LiteralPath $cache) {
+  $line = Get-Content -LiteralPath $cache | Where-Object { $_ -match '^SNESRECOMP_ROOT:PATH=' } | Select-Object -First 1
+  if ($line) { $framework = $line.Substring('SNESRECOMP_ROOT:PATH='.Length) }
+}
+. (Join-Path $framework 'tools/release/RuntimeDllClosure.ps1')
 
 $sdlDll = "$SdlBackend.dll"
 $sdlSource = Join-Path $build $sdlDll

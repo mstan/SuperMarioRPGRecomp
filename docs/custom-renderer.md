@@ -1,8 +1,8 @@
 # Experimental custom field renderer
 
-The default is the original PPU renderer at **4:3**. Enable
+Fresh settings enable adaptive **Fit to window** widescreen. Configure
 **Widescreen (Experimental)** in Mods, then choose **Fit to window**,
-**16:9**, or **21:9** to opt in. Disabling the mod restores the original
+**16:9**, or **21:9**. Disabling the mod restores the original
 renderer, with no custom composition or actor observation in normal play.
 Fit reveals additional horizontal map area as the window grows. It keeps
 the native 224-line height and 7:6 pixel aspect;
@@ -12,7 +12,7 @@ ratios use letterboxing. Standard battle backgrounds expose any authored
 horizontal borders. Menus, the title and unrecognized scene contracts stay
 centered at native size.
 
-The package remains opt-in. Its existing package/feature IDs are retained
+The package's existing feature IDs are retained
 so saved enable/disable selections continue to work. The former split-HUD
 option has been removed; UI and battle combatants retain native placement.
 
@@ -25,7 +25,7 @@ From this game worktree:
 ```
 
 The helper refreshes a copy of the executable, assets, and mod catalog under
-`build-custom/playtest`. New settings start with widescreen disabled; enable
+`build-custom/playtest`. New settings start with adaptive Fit widescreen; configure
 it in Mods to use the custom renderer. Existing mod choices and saves are
 preserved, including choices saved by earlier playtest builds. Earlier
 helpers enabled widescreen automatically; disable it once in Mods if you

@@ -27,17 +27,14 @@ snesrecomp's own runner implementations (`snesrecomp/runner/`).
 
 The ROM is **never** redistributed — you supply your own legally-dumped copy.
 
-## Current status: preview quality, Mods and coverage QA release (v0.0.3)
+## Current status: preview quality and diagnostics (v0.0.6)
 
-This preview boots, runs the attract loop, and holds up under an unattended
-headless soak (see [Qualification](#qualification)). v0.0.3 adds the built-in
-Mods catalog, moves widescreen to an opt-in Mods-tab entry, adds an opt-in
-coverage proof capture mod that writes shareable bundles, and imports the
-first user early-route coverage bundle into the static coverage profile. A
-short early-game replay segment has been checked against the regenerated build,
-but this is still **not** a completed end-to-end human playthrough.
-See [RELEASE_NOTES_v0.0.3.md](RELEASE_NOTES_v0.0.3.md) for the exact collection
-rules and the full list of changes and limitations.
+This preview boots and runs the attract loop (see
+[Qualification](#qualification)). Version 0.0.6 adds startup/crash logging and
+optional rolling input/checkpoint capture, while preserving native saves and
+existing mod choices. Fresh settings use adaptive Fit widescreen; diagnostic
+capture remains optional. This is still **not** a completed end-to-end human
+playthrough. See [diagnostics](DIAGNOSTICS.md) for collection and replay.
 
 ## Required ROM
 
@@ -197,9 +194,18 @@ analyzer as `--profile-manifest`, so interpreter entries that were cleanly
 observed by a real run get promoted to optional AOT roots on the next
 regeneration — see [Qualification](#qualification).
 
+## Crash diagnostics
+
+Version **0.0.6** adds optional rolling input/checkpoint capture and startup
+logs that include failures before gameplay. Run **Start diagnostics.cmd** on
+Windows, or `sh "Start diagnostics.sh"` under Wine, then use the matching
+**Collect diagnostics** script after closing the game. See
+[the collection and replay instructions](DIAGNOSTICS.md).
+
 ## Custom field renderer (experimental)
 
-The original renderer at **4:3** is the default. To opt in, enable
+Fresh settings enable adaptive **Fit to window** widescreen. Existing saved
+choices remain respected. To change it, use
 **Widescreen (Experimental)** in Mods and choose **Fit to window**,
 **16:9**, or **21:9**. Disabling the mod restores the original renderer.
 The custom renderer reveals additional horizontal scenery and actors while

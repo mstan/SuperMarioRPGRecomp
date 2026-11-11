@@ -1,5 +1,8 @@
 #include "smrpg_runtime.h"
 #include "smrpg_renderer.h"
+#include "smrpg_replay.h"
+#include "smrpg_startup.h"
+#include "smrpg_input_script.h"
 
 #include "common_rtl.h"
 #include "cpu_trace.h"
@@ -88,8 +91,9 @@ static SpcPlayer g_sdl_spc_player = {
 SpcPlayer *g_spc_player = &g_sdl_spc_player;
 
 void NORETURN Die(const char *error) {
+  host_report_fatal(error ? error : "unknown error");
   fprintf(stderr, "fatal: %s\n", error ? error : "unknown error");
-  SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Super Mario RPG",
+  if (!getenv("SMRPG_TEST_HIDDEN")) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Super Mario RPG",
                            error ? error : "Unknown error", NULL);
   exit(EXIT_FAILURE);
 }
@@ -613,8 +617,11 @@ static int update_adaptive_widescreen(SDL_Renderer *renderer,
 }
 
 int main(int argc, char **argv) {
+  SmrpgStartupLogging();
   SDL_SetMainReady();
   host_report_init(kWindowTitle, kBuildVersion);
+  SmrpgInstallCrashCapture();
+  SmrpgCrashTestPhase("startup");
   g_mods_ready = snes_mod_runtime_initialize_c(
       smrpg_mod_root(), "super-mario-rpg-us", kSmrpgSha256Hex);
   if (!g_mods_ready) {
@@ -640,6 +647,7 @@ int main(int argc, char **argv) {
   const char *program_path = (argc >= 1) ? argv[0] : NULL;
   SnesrecompHostArgs host_args;
   if (!snesrecomp_host_args_parse(&argc, &argv, &host_args)) return 2;
+  snesrecomp_anchor_to_exe_dir();
   if (host_args.help) {
     snesrecomp_host_args_usage(program_path, NULL);
     return 0;
@@ -662,6 +670,8 @@ int main(int argc, char **argv) {
     free(rom);
     return 2;
   }
+  SmrpgReplayRom(rom, (unsigned)rom_size);
+  host_report_breadcrumb("Verified source ROM; committing selected mods");
   if (g_mods_ready) {
     if (!snes_mod_runtime_commit_c(rom_path)) {
       fprintf(stderr, "SNES mod plan rejected: %s\n",
@@ -716,7 +726,23 @@ int main(int argc, char **argv) {
 #endif
     }
   }
+  const char *save_root = getenv("SNESRECOMP_SAVE_ROOT");
+  if (save_root && *save_root) RtlSetSaveRoot(save_root);
   RtlReadSram();
+  const char *resume_state = getenv("SMRPG_RESUME_STATE");
+  if (resume_state && *resume_state) {
+    if (!RtlLoadSnapshot(resume_state)) {
+      host_report_fatal("Unable to load the requested execution snapshot");
+      return 8;
+    }
+    host_report_breadcrumb("Resume state loaded: %s", resume_state);
+  }
+  InputSpan input_spans[kMaxInputSpans];
+  size_t input_span_count = 0;
+  if (!parse_input_script(input_spans, &input_span_count))
+    Die("invalid SNESRECOMP_INPUT_SCRIPT; expected FIRST[-LAST]:MASK entries");
+  const char *replay_input = getenv("SMRPG_REPLAY_INPUT_FILE");
+  if (replay_input && *replay_input && !SmrpgReplayPlayback(replay_input)) return 8;
 
   /* SDL_WINDOW_ALLOW_HIGHDPI is one of the few old names SDL3 does NOT alias
    * in SDL_oldnames.h; it became SDL_WINDOW_HIGH_PIXEL_DENSITY. */
@@ -729,7 +755,7 @@ int main(int argc, char **argv) {
       kWindowTitle,
       launcher_settings.adaptive_view ? 960 : 768,
       launcher_settings.adaptive_view ? 540 : 576,
-      SDL_WINDOW_RESIZABLE | kHighDpiFlag);
+      SDL_WINDOW_RESIZABLE | kHighDpiFlag | (getenv("SMRPG_TEST_HIDDEN") ? SDL_WINDOW_HIDDEN : 0));
   if (!window) Die("Unable to create the game window");
   if (launcher_settings.fullscreen)
     snesrecomp_sdl_set_fullscreen(window, true);
@@ -861,11 +887,22 @@ int main(int argc, char **argv) {
     if (!paused) {
       uint32_t input =
           keyboard_input() | controller_input(pad) |
+          scripted_input(input_spans, input_span_count, frames) |
           debug_server_get_controller_inputs() |
           (1u << 30) | debug_server_get_controller_active_mask();
+      RtlApuLock();
+      bool replay_frame = SmrpgReplayBegin(&input, &logical_width, launcher_settings.adaptive_view != 0);
+      RtlApuUnlock();
+      if (!replay_frame) break;
+      SmrpgSetWidescreenExtra((logical_width - 256) / 2);
+      SmrpgBeginDrawing(pixels, (size_t)logical_width * kBytesPerPixel);
+      host_report_crash_test_tick();
       (void)RtlRunFrame(input);
       if (g_fail || !SmrpgLastLleResult())
         Die("Super Mario RPG runtime execution failed");
+      RtlApuLock();
+      SmrpgReplayEnd();
+      RtlApuUnlock();
       SmrpgDrawPpuFrame();
       SDL_Rect update_rect = {0, 0, logical_width, kFrameHeight};
       SDL_UpdateTexture(texture, &update_rect, pixels,
@@ -900,6 +937,7 @@ int main(int argc, char **argv) {
   if (!write_frame_bmp(frame_dump, pixels, logical_width, kFrameHeight))
     fprintf(stderr, "Unable to write frame dump: %s\n", frame_dump);
   RtlWriteSram();
+  SmrpgReplayShutdown();
   if (g_coverage_bundle_dir[0]) {
     Tier2CoverageWriteDefaultManifest(SmrpgGameInfo()->title);
     tier2_capture_close();
@@ -925,5 +963,5 @@ int main(int argc, char **argv) {
   g_audio_mutex = NULL;
   SDL_Quit();
   free(rom);
-  return 0;
+  return SmrpgReplayPlaying() && SmrpgReplayFailed() ? 8 : 0;
 }

@@ -24,8 +24,10 @@ include(${RECOMP_UI_ROOT}/recomp_ui.cmake)
 set(SNESRECOMP_BUILD_VERSION "" CACHE STRING
     "Release version stamp baked into crash reports (empty = dev)")
 
+set(SMRPG_GEN_DIR "${CMAKE_SOURCE_DIR}/src/gen" CACHE PATH
+    "Private generated sources matching the selected engine")
 file(GLOB SMRPG_GEN_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/gen/*.c")
+    "${SMRPG_GEN_DIR}/*.c")
 if(NOT SMRPG_GEN_SOURCES)
     message(FATAL_ERROR
         "src/gen is empty; stage the verified ROM as smrpg.sfc and run "
@@ -68,9 +70,33 @@ add_executable(SuperMarioRPGSNESRecomp
     ${SMRPG_GEN_SOURCES}
     src/mods/smrpg_coverage_plugin.c
     src/mods/smrpg_widescreen_plugin.c
+    src/mods/smrpg_diagnostics_plugin.c
+    src/smrpg_replay.c
+    src/smrpg_startup.c
     src/sdl_main.c
     src/smrpg_runtime.c
     src/smrpg_renderer.c)
+
+# Keep this title on its qualified engine pin. Reuse the shared bounded writer
+# locally until that pinned engine contains the service; newer engines supply it.
+if(NOT EXISTS "${SNESRECOMP_ROOT}/runner/src/diagnostics/replay_writer.c")
+    target_sources(SuperMarioRPGSNESRecomp PRIVATE src/diagnostics/replay_writer.c)
+endif()
+set_property(TARGET SuperMarioRPGSNESRecomp PROPERTY WIN32_EXECUTABLE TRUE)
+set(replay_identity "${SNESRECOMP_BUILD_VERSION};${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_SIZEOF_VOID_P};${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_RELEASE};${SNESRECOMP_ENABLE_TRACE}")
+foreach(input src/sdl_main.c src/smrpg_runtime.c src/smrpg_renderer.c src/smrpg_replay.c src/smrpg_input_script.h src/diagnostics/replay_writer.c)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${input}")
+    file(SHA256 "${CMAKE_SOURCE_DIR}/${input}" digest)
+    string(APPEND replay_identity ";${digest}")
+endforeach()
+foreach(input ${SMRPG_GEN_SOURCES} "${CMAKE_SOURCE_DIR}/recomp/funcs.h")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")
+    file(SHA256 "${input}" digest)
+    string(APPEND replay_identity ";${digest}")
+endforeach()
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${SNESRECOMP_ROOT}" OUTPUT_VARIABLE replay_engine OUTPUT_STRIP_TRAILING_WHITESPACE)
+string(SHA256 replay_identity "${replay_identity};${replay_engine}")
+set_property(SOURCE src/smrpg_replay.c APPEND PROPERTY COMPILE_DEFINITIONS SMRPG_REPLAY_IDENTITY="${replay_identity}")
 
 function(configure_smrpg_target target)
     target_include_directories(${target} PRIVATE
@@ -103,6 +129,7 @@ if(BUILD_TESTING)
 endif()
 # Hosts include "desktop/sdl_compat.h" rather than <SDL.h> so both majors build.
 snesrecomp_target_sdl(SuperMarioRPGSNESRecomp)
+snesrecomp_target_post_mortem(SuperMarioRPGSNESRecomp)
 recomp_target_launcher_ui(SuperMarioRPGSNESRecomp CONSOLE snes)
 
 snesrecomp_target_mod_catalog(SuperMarioRPGSNESRecomp
